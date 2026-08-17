@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<save>
+    <header version="2" />
+    <version major="3" minor="6" revision="6" build="0" />
+    <region id="Config">
+        <node id="root">
+            <children>
+                <node id="Dependencies" />
+                <node id="ModuleInfo">
+                    <attribute id="Author" value="Gusta" type="30" />
+                    <attribute id="CharacterCreationLevelName" value="" type="22" />
+                    <attribute id="Description" value="Scales enemy Vitality, Physical Armour, Magic Armour, and adjusts battle XP." type="30" />
+                    <attribute id="DescriptionName" value="" type="28" handle="ls::TranslatedStringRepository::s_HandleUnknown" />
+                    <attribute id="DisplayName" value="" type="28" handle="ls::TranslatedStringRepository::s_HandleUnknown" />
+                    <attribute id="Folder" value="DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101" type="30" />
+                    <attribute id="GMTemplate" value="" type="22" />
+                    <attribute id="LobbyLevelName" value="" type="22" />
+                    <attribute id="MD5" value="" type="23" />
+                    <attribute id="MenuLevelName" value="" type="22" />
+                    <attribute id="Name" value="DifficultyMod" type="22" />
+                    <attribute id="NumPlayers" value="4" type="1" />
+                    <attribute id="PhotoBooth" value="" type="22" />
+                    <attribute id="StartupLevelName" value="" type="22" />
+                    <attribute id="Tags" value="" type="30" />
+                    <attribute id="Type" value="Add-on" type="22" />
+                    <attribute id="UUID" value="e3d48d57-3f32-4d2a-9e1e-28b9a712f101" type="22" />
+                    <attribute id="Version" value="268435456" type="4" />
+                    <children>
+                        <node id="PublishVersion">
+                            <attribute id="Version" value="909321303" type="4" />
+                        </node>
+                        <node id="Scripts" />
+                        <node id="TargetModes">
+                            <children>
+                                <node id="Target">
+                                    <attribute id="Object" value="Story" type="22" />
+                                </node>
+                                <node id="Target">
+                                    <attribute id="Object" value="Arena" type="22" />
+                                </node>
+                                <node id="Target">
+                                    <attribute id="Object" value="GM" type="22" />
+                                </node>
+                            </children>
+                        </node>
+                    </children>
+                </node>
+            </children>
+        </node>
+    </region>
+</save>
