@@ -25,12 +25,13 @@ end
 
 local function PrintLog(msg)
     if not Config or not Config.DebugLogging then return end
+    local formatted = string.format("[DifficultyMod] %s", msg)
     if Ext and Ext.Utils and Ext.Utils.Print then
-        Ext.Utils.Print(msg)
+        Ext.Utils.Print(formatted)
     elseif Ext and Ext.Print then
-        Ext.Print(msg)
+        Ext.Print(formatted)
     else
-        print(msg)
+        print(formatted)
     end
 end
 
@@ -87,8 +88,6 @@ end
 -- 3. Core: In-Memory Character Stat & XP Template Scaling (Inheritance-Aware)
 --------------------------------------------------------------------------------
 local function ApplyDifficultyScaling()
-    PrintLog("[DifficultyMod] Applying in-memory difficulty scaling to Character stats...")
-
     local getStatEntriesFn = (Ext and Ext.Stats and Ext.Stats.GetStats) or (Ext and Ext.Stats and Ext.Stats.GetStatEntries) or (Ext and Ext.GetStatEntries)
     local getStatFn = (Ext and Ext.Stats and Ext.Stats.Get) or (Ext and Ext.GetStat)
 
@@ -164,10 +163,10 @@ local function ApplyDifficultyScaling()
             end
         end
 
-        PrintLog(string.format("[DifficultyMod] In-memory scaling applied to %d enemy templates (Vitality: x%.2f, PhysArmour: x%.2f, MagicArmour: x%.2f, CombatXP: x%.2f).",
+        PrintLog(string.format("In-memory scaling applied to %d enemy templates (Vitality: x%.2f, PhysArmour: x%.2f, MagicArmour: x%.2f, CombatXP: x%.2f).",
             modifiedCount, Config.EnemyVitalityMultiplier, Config.EnemyPhysicalArmourMultiplier, Config.EnemyMagicArmourMultiplier, Config.CombatXPMultiplier or 1.0))
     else
-        PrintLog("[DifficultyMod] Warning: Ext.Stats API not accessible.")
+        PrintLog("Warning: Ext.Stats API not accessible.")
     end
 end
 
@@ -175,98 +174,96 @@ end
 -- 4. Server-Side: Proportional Current Health & Armour Scaling on Save Load
 --------------------------------------------------------------------------------
 local function ScaleCharacterCurrentStats(guidOrChar)
-    local char
+    local guid = nil
+    local char = nil
+
     if type(guidOrChar) == "string" then
-        if not Osi then return end
-        if Osi.CharacterIsPlayer(guidOrChar) == 1 or Osi.CharacterIsPartyMember(guidOrChar) == 1 then
-            return
-        end
-        if Osi.CharacterIsSummon(guidOrChar) == 1 then
-            local master = Osi.CharacterGetOwnerCharacter(guidOrChar)
-            if master and (Osi.CharacterIsPlayer(master) == 1 or Osi.CharacterIsPartyMember(master) == 1) then
-                return
-            end
-        end
-        char = (Ext.Entity and Ext.Entity.GetCharacter and Ext.Entity.GetCharacter(guidOrChar)) or (Ext.GetCharacter and Ext.GetCharacter(guidOrChar))
+        guid = guidOrChar
+        char = (Ext.Entity and Ext.Entity.GetCharacter and Ext.Entity.GetCharacter(guid)) or (Ext.GetCharacter and Ext.GetCharacter(guid))
     else
         char = guidOrChar
+        if char and char.MyGuid then guid = char.MyGuid end
     end
 
-    if char and char.Stats and not char.Stats.IsDead then
-        if char.IsPlayer or char.IsPartyMember then return end
-        if char.OwnerHandle then
-            local owner = (Ext.Entity and Ext.Entity.GetCharacter and Ext.Entity.GetCharacter(char.OwnerHandle)) or (Ext.GetCharacter and Ext.GetCharacter(char.OwnerHandle))
-            if owner and (owner.IsPlayer or owner.IsPartyMember) then return end
-        end
+    if not char or not char.Stats then return end
 
-        local stats = char.Stats
-        -- Scale Current Vitality to match the +50% expanded maximum
-        if stats.CurrentVitality and stats.CurrentVitality > 0 and stats.MaxVitality and stats.MaxVitality > 0 then
-            local scaledVit = math.floor(stats.CurrentVitality * Config.EnemyVitalityMultiplier)
-            stats.CurrentVitality = math.min(stats.MaxVitality, scaledVit)
-        end
+    -- Exclude dead characters
+    if char.Dead or (char.Stats.CurrentVitality and char.Stats.CurrentVitality <= 0) then
+        return
+    end
 
-        -- Scale Current Physical Armour to match the +50% expanded maximum
-        if stats.CurrentArmor and stats.CurrentArmor > 0 and stats.MaxArmor and stats.MaxArmor > 0 then
-            local scaledArmor = math.floor(stats.CurrentArmor * Config.EnemyPhysicalArmourMultiplier)
-            stats.CurrentArmor = math.min(stats.MaxArmor, scaledArmor)
+    -- Exclude player and party characters
+    if char.PlayerCustomData ~= nil then return end
+    if char.Stats.Name and IsPlayerOrHeroStat(char.Stats.Name) then return end
+    if Osi and guid then
+        if Osi.CharacterIsPlayer(guid) == 1 or Osi.CharacterIsPartyMember(guid) == 1 then
+            return
         end
+    end
 
-        -- Scale Current Magic Armour to match the +50% expanded maximum
-        if stats.CurrentMagicArmor and stats.CurrentMagicArmor > 0 and stats.MaxMagicArmor and stats.MaxMagicArmor > 0 then
-            local scaledMagicArmor = math.floor(stats.CurrentMagicArmor * Config.EnemyMagicArmourMultiplier)
-            stats.CurrentMagicArmor = math.min(stats.MaxMagicArmor, scaledMagicArmor)
+    local stats = char.Stats
+    local maxVit = stats.MaxVitality or 0
+    local curVit = stats.CurrentVitality or 0
+    local maxArm = stats.MaxArmor or 0
+    local curArm = stats.CurrentArmor or 0
+    local maxMagicArm = stats.MaxMagicArmor or 0
+    local curMagicArm = stats.CurrentMagicArmor or 0
+
+    -- Scale Current Vitality proportionally up to MaxVitality
+    if maxVit > 0 and curVit > 0 and curVit < maxVit then
+        local scaledVit = math.min(maxVit, math.floor(curVit * Config.EnemyVitalityMultiplier))
+        stats.CurrentVitality = scaledVit
+        if Osi and guid and scaledVit >= maxVit and Osi.Proc_CharacterFullRestore then
+            pcall(Osi.Proc_CharacterFullRestore, guid)
         end
+    end
+
+    -- Scale Current Physical Armour proportionally up to MaxArmor
+    if maxArm > 0 and curArm > 0 and curArm < maxArm then
+        local scaledArm = math.min(maxArm, math.floor(curArm * Config.EnemyPhysicalArmourMultiplier))
+        stats.CurrentArmor = scaledArm
+    end
+
+    -- Scale Current Magic Armour proportionally up to MaxMagicArmor
+    if maxMagicArm > 0 and curMagicArm > 0 and curMagicArm < maxMagicArm then
+        local scaledMagicArm = math.min(maxMagicArm, math.floor(curMagicArm * Config.EnemyMagicArmourMultiplier))
+        stats.CurrentMagicArmor = scaledMagicArm
     end
 end
 
 local function ScaleAllLoadedMapEnemies()
-    local getAllFn = (Ext.Entity and Ext.Entity.GetAllCharacters) or Ext.GetAllCharacters
-    if not getAllFn then return end
-
-    local allChars = getAllFn()
-    if not allChars then return end
-
-    local count = 0
-    for _, char in ipairs(allChars) do
-        if char and char.Stats and not char.Stats.IsDead then
-            local isParty = (char.IsPlayer or char.IsPartyMember)
-            if not isParty and char.MyGuid and Osi then
-                isParty = (Osi.CharacterIsPlayer(char.MyGuid) == 1 or Osi.CharacterIsPartyMember(char.MyGuid) == 1)
+    local getGuidsFn = (Ext.Entity and Ext.Entity.GetAllCharacterGuids)
+    if getGuidsFn then
+        local ok, guids = pcall(getGuidsFn)
+        if ok and guids then
+            local count = 0
+            for _, g in ipairs(guids) do
+                local ok2 = pcall(ScaleCharacterCurrentStats, g)
+                if ok2 then count = count + 1 end
             end
-
-            if not isParty then
-                ScaleCharacterCurrentStats(char)
-                count = count + 1
-            end
+            PrintLog(string.format("Synchronized stats for %d characters on map.", count))
         end
-    end
-
-    if count > 0 then
-        PrintLog(string.format("[DifficultyMod] Proportionally scaled current health & armour for %d NPCs on map.", count))
     end
 end
 
 --------------------------------------------------------------------------------
--- 5. Server-Side: Dynamic Combat Experience Award on Enemy Death
+-- 5. Server-Side: Event Handlers & Osiris Registrations
 --------------------------------------------------------------------------------
-local function RegisterCombatListeners()
+local function RegisterServerEvents()
     local registerOsiris = (Ext and Ext.Osiris and Ext.Osiris.RegisterListener) or (Ext and Ext.RegisterOsirisListener)
 
     if registerOsiris and Osi then
-        -- Combat experience scaling
+        -- 1. Combat experience scaling on death
         registerOsiris("CharacterDied", 1, "after", function(charGuid)
             if not Config or not Config.CombatXPMultiplier or Config.CombatXPMultiplier <= 0 then
                 return
             end
             if not charGuid or not Osi then return end
 
-            -- Exclude player characters and party members
             if Osi.CharacterIsPlayer(charGuid) == 1 or Osi.CharacterIsPartyMember(charGuid) == 1 then
                 return
             end
 
-            -- Exclude player/companion summons
             if Osi.CharacterIsSummon(charGuid) == 1 then
                 local master = Osi.CharacterGetOwnerCharacter(charGuid)
                 if master and (Osi.CharacterIsPlayer(master) == 1 or Osi.CharacterIsPartyMember(master) == 1) then
@@ -274,11 +271,9 @@ local function RegisterCombatListeners()
                 end
             end
 
-            -- Determine enemy level
             local level = Osi.CharacterGetLevel(charGuid) or 1
             if level < 1 then level = 1 end
 
-            -- Calculate base experience
             local expRequired = LevelExpTable[level] or (level * level * 2000)
             if Osi.DB_LevelExp then
                 local ok, rows = pcall(Osi.DB_LevelExp.Get, Osi.DB_LevelExp, level, nil)
@@ -290,30 +285,28 @@ local function RegisterCombatListeners()
             local baseKillXP = expRequired / 20.0
             local scaledXP = math.max(1, math.floor(baseKillXP * Config.CombatXPMultiplier))
 
-            -- Grant scaled experience to the party
             Osi.PartyAddExperience(scaledXP)
 
-            PrintLog(string.format("[DifficultyMod] Awarded %d Combat XP (Level %d, Base: %d, Multiplier: %.2f) for defeating %s",
+            PrintLog(string.format("Awarded %d Combat XP (Level %d, Base: %d, Multiplier: %.2f) for defeating %s",
                 scaledXP, level, math.floor(baseKillXP), Config.CombatXPMultiplier, tostring(charGuid)))
         end)
 
-        -- Current stat scaling when character enters combat
+        -- 2. Savegame & Region startup hook
+        registerOsiris("RegionStarted", 1, "after", function(region)
+            ScaleAllLoadedMapEnemies()
+        end)
+
+        -- 3. Combat entry hook (for newly spawned/ambush enemies)
         registerOsiris("CharacterEnteredCombat", 2, "after", function(charGuid, combatId)
-            ScaleCharacterCurrentStats(charGuid)
+            pcall(ScaleCharacterCurrentStats, charGuid)
         end)
 
-        registerOsiris("ObjectEnteredCombat", 2, "after", function(objectGuid, combatId)
-            if Osi.ObjectIsCharacter(objectGuid) == 1 then
-                ScaleCharacterCurrentStats(objectGuid)
-            end
-        end)
-
-        PrintLog("[DifficultyMod] Server combat listeners registered.")
+        PrintLog("Server events registered.")
     end
 end
 
 --------------------------------------------------------------------------------
--- 6. Register Event Listeners
+-- 6. Register Engine Event Listeners
 --------------------------------------------------------------------------------
 -- StatsLoaded subscription (in-memory template scaling)
 if Ext and Ext.Events and Ext.Events.StatsLoaded then
@@ -322,27 +315,8 @@ elseif Ext and Ext.RegisterListener then
     Ext.RegisterListener("StatsLoaded", ApplyDifficultyScaling)
 end
 
--- Session load subscription (proportionally scales current health of existing map characters)
-if Ext and Ext.Events and Ext.Events.SessionLoaded then
-    Ext.Events.SessionLoaded:Subscribe(function()
-        ScaleAllLoadedMapEnemies()
-    end)
-elseif Ext and Ext.RegisterListener then
-    Ext.RegisterListener("SessionLoaded", function()
-        ScaleAllLoadedMapEnemies()
-    end)
-end
-
-if Ext and Ext.Events and Ext.Events.GameStateChanged then
-    Ext.Events.GameStateChanged:Subscribe(function(e)
-        if e.ToState == "Running" then
-            ScaleAllLoadedMapEnemies()
-        end
-    end)
-end
-
--- Server combat registrations
-RegisterCombatListeners()
+-- Server Osiris event registration
+RegisterServerEvents()
 
 return {
     ApplyDifficultyScaling = ApplyDifficultyScaling,

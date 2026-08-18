@@ -1,0 +1,5 @@
+# Ignore built mod archives and logs
+*.pak
+*.log
+__pycache__/
+*.pyc
