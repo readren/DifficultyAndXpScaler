@@ -1,18 +1,29 @@
 # DifficultyMod for Divinity: Original Sin 2 (Definitive Edition)
 
-A lightweight balance mod powered by **Norbyte's Script Extender**.
+A lightweight, purely script-driven balance mod powered by **Norbyte's Script Extender**.
+
+---
+
+## Key Design Principles
+
+1. **Zero Large Tables**: Does not overwrite or modify huge base game tables (e.g. `Character.txt`). All adjustments are performed dynamically in memory via Extender hooks (`StatsLoaded`).
+2. **Safe for Mid-Campaign Saves**: Full plug-and-play support for existing savegames created without the mod activated.
+3. **Clean Uninstallation**: Removing the mod immediately restores 100% vanilla behavior with zero residual data or missing status warnings.
+
+---
 
 ## Features
-1. **Battle XP Reduction**: Dynamically scales the combat XP gained from defeating enemies without affecting quest or exploration XP.
-2. **Enemy Vitality (HP) Scaling**: Multiplies Max HP only for hostile/enemy combatants (leaves player party, companions, and player summons untouched).
-3. **Enemy Physical & Magic Armour Scaling**: Multiplies Physical and Magic Armour only for enemies.
+
+* **Battle XP Scaling**: Dynamically adjusts combat XP gained from defeating enemies without affecting quest or exploration rewards.
+* **Enemy Vitality (HP) Scaling**: Dynamically scales Max Vitality for all enemy and monster archetypes while preserving player characters and companions (`_Hero`).
+* **Enemy Physical & Magic Armour Scaling**: Dynamically scales Physical Armour and Magic Armour for enemy archetypes.
 
 ---
 
 ## Configuration
 
-You can easily adjust the multipliers at any time by editing:
-`Mods/DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101/Story/RawFiles/Lua/Config.lua`
+Multipliers can be adjusted at any time in:
+[`Mods/DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101/Story/RawFiles/Lua/Config.lua`](file:///c:/projects/games/divinity/difficulty-mod/Mods/DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101/Story/RawFiles/Lua/Config.lua)
 
 ```lua
 local Config = {
@@ -27,32 +38,29 @@ local Config = {
     -- Print adjustments to the Script Extender console
     DebugLogging = true
 }
+
+return Config
 ```
 
 ---
 
-## Installation & How to Play
+## Installation & Deployment
 
 ### 1. Requirements
-* Make sure you have **Norbyte's Script Extender** installed (e.g. via [Divinity Mod Manager](https://github.com/LaughingLeader-DOS2-Mods/DivinityModManager) or by dropping `DXGI.dll` into your `Divinity Original Sin 2/DefEd/bin` directory).
+* [Norbyte's Script Extender](https://github.com/Norbyte/ositools) installed in your `Divinity Original Sin 2/DefEd/bin` directory (or installed via Divinity Mod Manager).
 
-### 2. Installing the Mod
-You can copy or create a directory symbolic link for the `Mods/DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101` folder to:
-
-`%USERPROFILE%\Documents\Larian Studios\Divinity Original Sin 2 Definitive Edition\Mods\`
-C:\Program Files (x86)\Steam\steamapps\common\Divinity Original Sin 2
-
-#### Quick PowerShell Symlink Command:
-Run this in PowerShell to link the folder directly so any edits here take effect instantly (works automatically with or without OneDrive backup enabled):
+### 2. Building & Deploying the `.pak`
+Run the included build script in PowerShell:
 ```powershell
-New-Item -ItemType SymbolicLink -Path "C:\Program Files (x86)\Steam\steamapps\common\Divinity Original Sin 2\DefEd\Data\Mods\DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101" -Target "C:\projects\games\divinity\difficulty-mod\Mods\DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101"
+.\build_pak.ps1
 ```
-#### Quick PowerShell Symlink Command:
-Run this in PowerShell to link the folder directly so any edits here take effect instantly (works automatically with or without OneDrive backup enabled):
-```powershell
-$docs = [Environment]::GetFolderPath('MyDocuments')
-New-Item -ItemType SymbolicLink -Path "$docs\Larian Studios\Divinity Original Sin 2 Definitive Edition\Mods\DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101" -Target "C:\projects\games\divinity\difficulty-mod\Mods\DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101"
+This automatically compiles `DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101.pak` and deploys it to your active DOS2 Mods folder.
+
+### 3. Validating the Project
+Run the validator script to verify XML metadata, JSON configs, and Lua AST syntax:
+```bash
+python validate.py
 ```
 
-### 3. Activating in Game
-* Open **Divinity Mod Manager** (or the in-game Mods menu), activate **DifficultyMod**, and export/save load order.
+### 4. Activating in Game
+* Open **Divinity Mod Manager** (or the in-game Mods menu), activate **DifficultyMod**, and save/export the load order.

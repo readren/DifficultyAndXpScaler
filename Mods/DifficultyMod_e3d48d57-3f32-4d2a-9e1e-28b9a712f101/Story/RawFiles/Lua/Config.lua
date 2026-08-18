@@ -1,22 +1,22 @@
 --[[
     DifficultyMod - Configuration
-    Adjust the multipliers below to change game balance.
+    Adjust the multipliers below as desired.
 --]]
 
 local Config = {
-    -- Combat Experience Multiplier
-    -- 0.5 = 50% XP gained from enemy kills (reduces battle XP by half)
-    -- 1.0 = Default vanilla XP
+    -- Multiplier for combat XP gained from defeating enemies (0.5 = 50% XP)
     CombatXPMultiplier = 0.5,
 
-    -- Enemy Stat Multipliers (Applied only to non-party / hostile entities)
-    -- 1.5 = +50% increase
-    -- 2.0 = +100% (doubled)
-    EnemyVitalityMultiplier = 1.5,       -- Enemy Max HP multiplier
-    EnemyPhysicalArmourMultiplier = 1.5,  -- Enemy Physical Armour multiplier
-    EnemyMagicArmourMultiplier = 1.5,    -- Enemy Magic Armour multiplier
+    -- Multiplier for enemy Vitality / Max HP (1.5 = +50% HP)
+    EnemyVitalityMultiplier = 1.5,
 
-    -- Debug mode (prints info to the Script Extender console / logs)
+    -- Multiplier for enemy Physical Armour (1.5 = +50% Physical Armour)
+    EnemyPhysicalArmourMultiplier = 1.5,
+
+    -- Multiplier for enemy Magic Armour (1.5 = +50% Magic Armour)
+    EnemyMagicArmourMultiplier = 1.5,
+
+    -- Print adjustments to the Script Extender console
     DebugLogging = true
 }
 
