@@ -3,3 +3,4 @@
 *.log
 __pycache__/
 *.pyc
+Character_Stats_Spreadsheet.csv
