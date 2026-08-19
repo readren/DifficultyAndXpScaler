@@ -171,6 +171,13 @@ if type(Config) ~= "table" then
     error("[DifficultyMod] Critical: Config.lua must return a configuration table.")
 end
 
+-- Precalculated module-level feature activation flags initialized once at startup
+local ShouldScaleVitality       = (Config.EnemyVitalityMultiplier ~= nil and Config.EnemyVitalityMultiplier ~= 1.0 and Config.EnemyVitalityMultiplier > 0)
+local ShouldScalePhysicalArmour = (Config.EnemyPhysicalArmourMultiplier ~= nil and Config.EnemyPhysicalArmourMultiplier ~= 1.0 and Config.EnemyPhysicalArmourMultiplier > 0)
+local ShouldScaleMagicArmour    = (Config.EnemyMagicArmourMultiplier ~= nil and Config.EnemyMagicArmourMultiplier ~= 1.0 and Config.EnemyMagicArmourMultiplier > 0)
+local ShouldOverrideCombatXP    = (Config.CombatXPMultiplier ~= nil and Config.CombatXPMultiplier ~= 1.0 and Config.CombatXPMultiplier > 0)
+local ShouldSyncLiveStats       = (ShouldScaleVitality or ShouldScalePhysicalArmour or ShouldScaleMagicArmour)
+
 --- Prints a formatted log message to the Script Extender debug console and log files.
 -- @param msg string: The textual message content to output to the console.
 -- @return nil
@@ -234,20 +241,36 @@ local LevelExpTable = {
     [25] = 3300000  -- Maximum baseline cap for calculation
 }
 
--- Table mapping vanilla DOS2 Character.txt Gain tier enums and integer strings to numerical multipliers
+-- Table mapping vanilla DOS2 Character.txt Gain tier enums, strings, and integer numbers to numerical multipliers
 local GainTierMultipliers = {
-    ["None"]       = 0.00, -- Non-combatants, civilians, traders, ambient animals (0% XP)
-    ["0"]          = 0.00, -- Integer enum representation of None (0% XP)
-    ["ExtraSmall"] = 0.25, -- Weak critters, minor swarms, trash minions (25% base XP)
-    ["1"]          = 0.25, -- Integer enum representation of ExtraSmall (25% base XP)
-    ["Small"]      = 0.50, -- Secondary adds, sub-standard minions (50% base XP)
-    ["2"]          = 0.50, -- Integer enum representation of Small (50% base XP)
-    ["Medium"]     = 1.00, -- Standard combatant baseline (100% base XP)
-    ["3"]          = 1.00, -- Integer enum representation of Medium (100% base XP)
-    ["Large"]      = 2.00, -- Elite enemies, champions, mini-bosses (200% base XP)
-    ["4"]          = 2.00, -- Integer enum representation of Large (200% base XP)
+    ["None"]       = 0.00, -- Non-combatants, civilians, ambient creatures (0% XP)
+    ["0"]          = 0.00, -- String enum representation of None (0% XP)
+    [0]            = 0.00, -- Integer enum representation of None (0% XP)
+    ["ExtraSmall"] = 0.25, -- Minor critters, rats, rabbits, sheep (25% base XP)
+    ["1"]          = 0.25, -- String enum representation of ExtraSmall (25% base XP)
+    [1]            = 0.25, -- Integer enum representation of ExtraSmall (25% base XP)
+    ["Small"]      = 0.50, -- Standard minions, adds, zombies, skeletons, wolves (50% base XP)
+    ["2"]          = 0.50, -- String enum representation of Small (50% base XP)
+    [2]            = 0.50, -- Integer enum representation of Small (50% base XP)
+    ["Medium"]     = 1.00, -- Standard combatant baseline (_Base, human fighters, mages) (100% base XP)
+    ["3"]          = 1.00, -- String enum representation of Medium (100% base XP)
+    [3]            = 1.00, -- Integer enum representation of Medium (100% base XP)
+    ["4"]          = 1.50, -- String enum representation of Veterans (150% base XP)
+    [4]            = 1.50, -- Integer enum representation of Veterans (150% base XP)
+    ["Large"]      = 2.00, -- Elite enemies, champions, mini-bosses, strong melee (200% base XP)
+    ["5"]          = 2.00, -- String enum representation of Large (200% base XP)
+    [5]            = 2.00, -- Integer enum representation of Large (200% base XP)
+    ["6"]          = 3.00, -- String enum representation of Mini-bosses (300% base XP)
+    [6]            = 3.00, -- Integer enum representation of Mini-bosses (300% base XP)
     ["ExtraLarge"] = 4.00, -- Major act bosses and pivotal story encounters (400% base XP)
-    ["5"]          = 4.00  -- Integer enum representation of ExtraLarge (400% base XP)
+    ["7"]          = 4.00, -- String enum representation of ExtraLarge (400% base XP)
+    [7]            = 4.00, -- Integer enum representation of ExtraLarge (400% base XP)
+    ["8"]          = 5.00, -- Apex / Super-boss encounters (500% base XP)
+    [8]            = 5.00,
+    ["9"]          = 6.00, -- Unique legendary encounters (600% base XP)
+    [9]            = 6.00,
+    ["10"]         = 8.00, -- Maximum cap tier (800% base XP)
+    [10]           = 8.00
 }
 
 -- Global cache storing the original unmodified Gain tier for each character template name
@@ -328,8 +351,8 @@ local function GetResolvedTemplateGain(statName)
             break
         end
     end
-    -- Fall back to "Medium" baseline if no explicit Gain was declared in hierarchy
-    return "Medium"
+    -- Fall back to "None" (0 XP) if hierarchy terminates without declaring a combat Gain tier
+    return "None"
 end
 
 --------------------------------------------------------------------------------
@@ -339,104 +362,123 @@ end
 --- Iterates over all character templates in memory to apply stat scaling and cache Gain tiers.
 -- @return nil
 local function ApplyDifficultyScaling()
+    -- If all feature flags are false, all multipliers are 1.0x (vanilla); exit immediately with zero overhead
+    if not (ShouldSyncLiveStats or ShouldOverrideCombatXP) then
+        PrintLog("All multipliers are 1.0x (vanilla). In-memory difficulty scaling skipped.")
+        return
+    end
+
     -- Call ExtGetCharacterStatNames() -> table of strings
     local charEntries = ExtGetCharacterStatNames()
     -- Counter tracking the number of modified character templates
     local modifiedCount = 0
-    -- Determine whether custom XP override is active based on multiplier configuration
-    local shouldOverrideXP = (Config.CombatXPMultiplier ~= nil and Config.CombatXPMultiplier ~= 1.0)
 
-    -- 1. Scale base template _Base (150 -> 225 Vitality at 1.5x)
-    -- Call ExtGetStat(name: string) -> table|userdata|nil
-    local baseEntry = ExtGetStat("_Base")
-    -- Assert that base root template exists in game data
-    if not baseEntry then
-        -- Throw fatal error if root template is missing
-        error("[DifficultyMod] Critical: Root character template '_Base' not found in stats engine.")
-    end
-    -- Check if _Base entry has a positive Vitality value
-    if baseEntry.Vitality and baseEntry.Vitality > 0 then
-        -- Call math.floor(x: number) -> integer to calculate rounded scaled vitality
-        baseEntry.Vitality = math.floor(baseEntry.Vitality * Config.EnemyVitalityMultiplier)
-    end
+    -- Table storing the pristine unmutated stat values for all templates captured in Pass 1
+    local OriginalStats = {}
 
-    -- 2. Ensure player/hero template _Hero remains locked at vanilla base (100)
-    -- Call ExtGetStat(name: string) -> table|userdata|nil
-    local heroEntry = ExtGetStat("_Hero")
-    -- Assert that hero root template exists in game data
-    if not heroEntry then
-        -- Throw fatal error if hero root template is missing
-        error("[DifficultyMod] Critical: Hero root template '_Hero' not found in stats engine.")
-    end
-    -- Force hero vitality base to 100 to prevent inheriting _Base scaling
-    heroEntry.Vitality = 100
+    -- =========================================================================
+    -- PASS 1: Read and capture pristine original data for all character templates
+    -- =========================================================================
 
-    -- 3. Cache Gain tiers and process all non-hero character entries
-    -- Iterate over every character template name returned by the engine
+    -- Capture pristine original data for all non-hero character templates (including root template _Base)
+    -- Call standard library function pairs(t: table) -> (iterator_function, table, nil)
+    -- Parameter: charEntries (type: table) - array of character stat template names
     for _, name in pairs(charEntries) do
-        -- Exclude root template _Base and any player/hero templates
-        if name ~= "_Base" and not IsPlayerOrHeroStat(name) then
+        -- Exclude player and companion hero templates (descendants of _Hero)
+        if not IsPlayerOrHeroStat(name) then
             -- Call ExtGetStat(name: string) -> table|userdata|nil
             local stat = ExtGetStat(name)
             -- Verify stat structure exists for this template name
             if stat then
-                -- Cache the original resolved Gain tier before modifying stat structure
-                local originalGain = GetResolvedTemplateGain(name)
-                -- Store original Gain tier in global lookup table for runtime XP calculation
-                TemplateOriginalGain[name] = originalGain
-
-                -- Retrieve parent stat structure if this template inherits from another
-                local parent = nil
-                -- Check if Using points to a valid distinct parent template
-                if stat.Using and stat.Using ~= "" and stat.Using ~= name then
-                    -- Call ExtGetStat(name: string) -> table|userdata|nil
-                    parent = ExtGetStat(stat.Using)
+                -- Only resolve and cache Gain tier when custom XP override is active
+                local resolvedGain = nil
+                if ShouldOverrideCombatXP then
+                    -- Call GetResolvedTemplateGain(statName: string) -> string to traverse unmutated hierarchy
+                    resolvedGain = GetResolvedTemplateGain(name)
+                    -- Store original Gain tier in global lookup table for runtime kill XP calculation
+                    TemplateOriginalGain[name] = resolvedGain
                 end
+
+                -- Snapshot pristine original properties before any in-memory mutation begins
+                OriginalStats[name] = {
+                    Using = (stat.Using and stat.Using ~= "" and stat.Using ~= name) and stat.Using or nil,
+                    Vitality = stat.Vitality,
+                    Armor = stat.Armor,
+                    MagicArmor = stat.MagicArmor,
+                    Gain = resolvedGain
+                }
+            end
+        end
+    end
+
+    -- =========================================================================
+    -- PASS 2: Apply in-memory stat scaling and suppress native engine kill XP
+    -- =========================================================================
+
+    -- Iterate over all non-hero character templates to scale stats and zero-out Gain
+    -- Call standard library function pairs(t: table) -> (iterator_function, table, nil)
+    -- Parameter: charEntries (type: table) - array of character stat template names
+    for _, name in pairs(charEntries) do
+        -- Exclude player and companion hero templates (descendants of _Hero)
+        if not IsPlayerOrHeroStat(name) then
+            -- Call ExtGetStat(name: string) -> table|userdata|nil
+            local stat = ExtGetStat(name)
+            local orig = OriginalStats[name]
+            -- Verify stat structure and snapshot data exist for this template name
+            if stat and orig then
+                -- Retrieve parent snapshot data from pristine OriginalStats table
+                local origParent = orig.Using and OriginalStats[orig.Using] or nil
 
                 -- Boolean flag indicating if any property on this stat was modified
                 local modified = false
 
-                -- Vitality: Scale explicit overrides that differ from inherited parent value
-                local parentVit = parent and parent.Vitality or nil
-                local baseVit = stat.Vitality
-                -- Check if template specifies a positive Vitality value
-                if baseVit and baseVit > 0 then
-                    -- Only scale if vitality explicitly overrides parent value
-                    if parentVit and baseVit ~= parentVit then
-                        -- Call math.floor(x: number) -> integer for scaled vitality
-                        stat.Vitality = math.floor(baseVit * Config.EnemyVitalityMultiplier)
-                        modified = true
+                -- Vitality: Scale explicit overrides (or root templates where origParent is nil)
+                if ShouldScaleVitality then
+                    local baseVit = orig.Vitality
+                    local parentVit = origParent and origParent.Vitality or nil
+                    -- Check if template specifies a positive Vitality value
+                    if baseVit and baseVit > 0 then
+                        -- Scale if template is a root (no parent) or explicitly overrides parent value
+                        if not parentVit or baseVit ~= parentVit then
+                            -- Call math.floor(x: number) -> integer for scaled vitality
+                            stat.Vitality = math.floor(baseVit * Config.EnemyVitalityMultiplier)
+                            modified = true
+                        end
                     end
                 end
 
-                -- Physical Armour: Scale explicit overrides that differ from parent
-                local parentArm = parent and parent.Armor or nil
-                local baseArm = stat.Armor
-                -- Check if template specifies a positive Physical Armour value
-                if baseArm and baseArm > 0 then
-                    -- Scale if no parent exists or value differs from parent
-                    if not parentArm or baseArm ~= parentArm then
-                        -- Call math.floor(x: number) -> integer for scaled armour
-                        stat.Armor = math.floor(baseArm * Config.EnemyPhysicalArmourMultiplier)
-                        modified = true
+                -- Physical Armour: Scale explicit overrides that differ from pristine parent value
+                if ShouldScalePhysicalArmour then
+                    local baseArm = orig.Armor
+                    local parentArm = origParent and origParent.Armor or nil
+                    -- Check if template specifies a positive Physical Armour value
+                    if baseArm and baseArm > 0 then
+                        -- Scale if no parent exists or value differs from pristine parent
+                        if not parentArm or baseArm ~= parentArm then
+                            -- Call math.floor(x: number) -> integer for scaled armour
+                            stat.Armor = math.floor(baseArm * Config.EnemyPhysicalArmourMultiplier)
+                            modified = true
+                        end
                     end
                 end
 
-                -- Magic Armour: Scale explicit overrides that differ from parent
-                local parentMagicArm = parent and parent.MagicArmor or nil
-                local baseMagicArm = stat.MagicArmor
-                -- Check if template specifies a positive Magic Armour value
-                if baseMagicArm and baseMagicArm > 0 then
-                    -- Scale if no parent exists or value differs from parent
-                    if not parentMagicArm or baseMagicArm ~= parentMagicArm then
-                        -- Call math.floor(x: number) -> integer for scaled magic armour
-                        stat.MagicArmor = math.floor(baseMagicArm * Config.EnemyMagicArmourMultiplier)
-                        modified = true
+                -- Magic Armour: Scale explicit overrides that differ from pristine parent value
+                if ShouldScaleMagicArmour then
+                    local baseMagicArm = orig.MagicArmor
+                    local parentMagicArm = origParent and origParent.MagicArmor or nil
+                    -- Check if template specifies a positive Magic Armour value
+                    if baseMagicArm and baseMagicArm > 0 then
+                        -- Scale if no parent exists or value differs from pristine parent
+                        if not parentMagicArm or baseMagicArm ~= parentMagicArm then
+                            -- Call math.floor(x: number) -> integer for scaled magic armour
+                            stat.MagicArmor = math.floor(baseMagicArm * Config.EnemyMagicArmourMultiplier)
+                            modified = true
+                        end
                     end
                 end
 
                 -- Suppress engine native kill XP reward so custom multiplier can be awarded dynamically
-                if shouldOverrideXP then
+                if ShouldOverrideCombatXP then
                     -- Set Gain to 0 to disable native unscaled kill XP calculation
                     stat.Gain = 0
                     modified = true
@@ -463,6 +505,11 @@ end
 -- @param guidOrChar string|userdata: The GUID string or character entity object to scale.
 -- @return nil
 local function ScaleCharacterCurrentStats(guidOrChar)
+    -- If no stat multipliers are active, skip live character instance synchronization entirely
+    if not ShouldSyncLiveStats then
+        return
+    end
+
     local guid = nil
     local char = nil
 
@@ -509,7 +556,7 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     local curMagicArm = stats.CurrentMagicArmor or 0
 
     -- Scale Current Vitality proportionally up to MaxVitality
-    if maxVit > 0 and curVit > 0 and curVit < maxVit then
+    if ShouldScaleVitality and maxVit > 0 and curVit > 0 and curVit < maxVit then
         -- Call math.min(x: number, y: number) -> number and math.floor(x: number) -> integer
         local scaledVit = math.min(maxVit, math.floor(curVit * Config.EnemyVitalityMultiplier))
         stats.CurrentVitality = scaledVit
@@ -521,14 +568,14 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     end
 
     -- Scale Current Physical Armour proportionally up to MaxArmor
-    if maxArm > 0 and curArm > 0 and curArm < maxArm then
+    if ShouldScalePhysicalArmour and maxArm > 0 and curArm > 0 and curArm < maxArm then
         -- Call math.min(x: number, y: number) -> number and math.floor(x: number) -> integer
         local scaledArm = math.min(maxArm, math.floor(curArm * Config.EnemyPhysicalArmourMultiplier))
         stats.CurrentArmor = scaledArm
     end
 
     -- Scale Current Magic Armour proportionally up to MaxMagicArmor
-    if maxMagicArm > 0 and curMagicArm > 0 and curMagicArm < maxMagicArm then
+    if ShouldScaleMagicArmour and maxMagicArm > 0 and curMagicArm > 0 and curMagicArm < maxMagicArm then
         -- Call math.min(x: number, y: number) -> number and math.floor(x: number) -> integer
         local scaledMagicArm = math.min(maxMagicArm, math.floor(curMagicArm * Config.EnemyMagicArmourMultiplier))
         stats.CurrentMagicArmor = scaledMagicArm
@@ -538,6 +585,11 @@ end
 --- Synchronizes stats for all loaded character instances on the active map level.
 -- @return nil
 local function ScaleAllLoadedMapEnemies()
+    -- If no stat multipliers are active, skip map iteration entirely
+    if not ShouldSyncLiveStats then
+        return
+    end
+
     -- Call ExtGetAllCharacterGuids() -> table of string GUIDs
     local guids = ExtGetAllCharacterGuids()
     if guids then
@@ -649,8 +701,8 @@ local function RegisterServerEvents()
     -- Parameter 3: "after" (type: string) - execute handler after engine event processing
     -- Parameter 4: callback function receiving charGuid (type: string)
     ExtRegisterOsiris("CharacterDied", 1, "after", function(charGuid)
-        -- Verify Config is valid and CombatXPMultiplier is positive
-        if not Config.CombatXPMultiplier or Config.CombatXPMultiplier <= 0 then
+        -- Exit immediately if custom XP scaling is inactive (1.0 = native engine XP, <= 0 = disabled)
+        if not ShouldOverrideCombatXP then
             return
         end
         -- Verify charGuid is valid
@@ -674,23 +726,45 @@ local function RegisterServerEvents()
         local level = Osi.CharacterGetLevel(charGuid) or 1
         if level < 1 then level = 1 end
 
-        -- Query character template name from Extender entity component
+        -- Query character template name from Extender entity component with multiple fallbacks
         local templateName = nil
         -- Call ExtGetCharacter(guid: string) -> table|userdata|nil
         local char = ExtGetCharacter(charGuid)
-        if char and char.Stats and char.Stats.Name then
-            templateName = char.Stats.Name
+        if char then
+            if char.Stats and char.Stats.Name and char.Stats.Name ~= "" then
+                templateName = char.Stats.Name
+            elseif char.StatsId and char.StatsId ~= "" then
+                templateName = char.StatsId
+            elseif char.RootTemplate and char.RootTemplate.Stats and char.RootTemplate.Stats ~= "" then
+                templateName = char.RootTemplate.Stats
+            end
         end
 
-        -- Retrieve the cached original Gain tier for this enemy's template name
-        local gainTier = (templateName and TemplateOriginalGain[templateName]) or "Medium"
-        -- Look up the numerical multiplier for this Gain tier (None=0.0, ExtraSmall=0.25, Small=0.5, Medium=1.0, Large=2.0, ExtraLarge=4.0)
-        local tierMultiplier = GainTierMultipliers[gainTier] or 1.00
+        -- Retrieve the cached original Gain tier for this enemy's template name (defaulting to "None" if unresolvable)
+        local gainTier = (templateName and TemplateOriginalGain[templateName]) or "None"
+        -- Look up the numerical multiplier from GainTierMultipliers table
+        local tierMultiplier = GainTierMultipliers[gainTier]
+        -- If not matched in dictionary, attempt numeric conversion with formula fallback
+        if tierMultiplier == nil and tonumber(gainTier) then
+            local n = tonumber(gainTier)
+            if n <= 0 then tierMultiplier = 0.0
+            elseif n == 1 then tierMultiplier = 0.25
+            elseif n == 2 then tierMultiplier = 0.50
+            elseif n == 3 then tierMultiplier = 1.00
+            elseif n == 4 then tierMultiplier = 1.50
+            elseif n == 5 then tierMultiplier = 2.00
+            elseif n == 6 then tierMultiplier = 3.00
+            elseif n == 7 then tierMultiplier = 4.00
+            elseif n == 8 then tierMultiplier = 5.00
+            elseif n == 9 then tierMultiplier = 6.00
+            else tierMultiplier = n * 0.75 end
+        end
+        tierMultiplier = tierMultiplier or 0.00
 
-        -- If template Gain tier is "None" (0.0 multiplier), no kill XP should be awarded
+        -- If template Gain tier resolves to 0.0 multiplier, no kill XP should be awarded
         if tierMultiplier <= 0 then
-            PrintLog(string.format("Character %s (Template: %s) has Gain = None. Awarded 0 XP.",
-                tostring(charGuid), tostring(templateName or "Unknown")))
+            PrintLog(string.format("Character %s resolved to 0x multiplier. Template: %s, Tier: %s",
+                tostring(charGuid), tostring(templateName or "Unknown"), tostring(gainTier)))
             return
         end
         
