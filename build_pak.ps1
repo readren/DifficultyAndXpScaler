@@ -31,21 +31,26 @@ $localPak = "$projectRoot\$pakName"
 
 Write-Host "`n[SUCCESS] $pakName successfully built: $localPak" -ForegroundColor Green
 
-# Optional: Deploy to standard Mods directories if reachable
-$candidateDirs = @(
-    "$env:USERPROFILE\Documents\Larian Studios\Divinity Original Sin 2 Definitive Edition\Mods",
-    "$env:USERPROFILE\OneDrive\Documents\Larian Studios\Divinity Original Sin 2 Definitive Edition\Mods",
-    "C:\Program Files (x86)\Steam\steamapps\common\Divinity Original Sin 2\DefEd\Data\Mods"
-)
+# Deploy strictly to standard user Documents Mods folder
+$myDocs = [Environment]::GetFolderPath("MyDocuments")
+$standardModDir = "$myDocs\Larian Studios\Divinity Original Sin 2 Definitive Edition\Mods"
 
-foreach ($dir in $candidateDirs) {
-    if (Test-Path $dir) {
-        $destFile = Join-Path $dir $pakName
-        try {
-            Copy-Item -Path $localPak -Destination $destFile -Force -ErrorAction Stop
-            Write-Host "[DEPLOYED] $destFile" -ForegroundColor Cyan
-        } catch {
-            Write-Host "[NOTE] Could not copy directly to $destFile (file may be in use or protected): $_" -ForegroundColor Yellow
-        }
+# Fallback check for OneDrive redirection if path doesn't exist
+if (-not (Test-Path $standardModDir)) {
+    $oneDriveDocs = "$env:USERPROFILE\OneDrive\Documents\Larian Studios\Divinity Original Sin 2 Definitive Edition\Mods"
+    if (Test-Path $oneDriveDocs) {
+        $standardModDir = $oneDriveDocs
     }
+}
+
+if (Test-Path $standardModDir) {
+    $destFile = Join-Path $standardModDir $pakName
+    try {
+        Copy-Item -Path $localPak -Destination $destFile -Force -ErrorAction Stop
+        Write-Host "[DEPLOYED] $destFile" -ForegroundColor Cyan
+    } catch {
+        Write-Host "[ERROR] Could not copy to $destFile (ensure game is closed so file is not locked): $_" -ForegroundColor Red
+    }
+} else {
+    Write-Host "[WARNING] Documents Mods folder not found: $standardModDir" -ForegroundColor Yellow
 }

@@ -55,7 +55,47 @@ local function ExtGetCharacterStatNames()
         return Ext.GetStatEntries("Character")
     end
     -- Throw fatal error if no Extender stat listing function exists
-    error("[DifficultyMod] Critical: Neither Ext.Stats.GetStats nor Ext.GetStatEntries API is available.")
+    error("[DifficultyMod] Critical: Neither Ext.Stats.GetStats nor Ext.GetStatEntries API is available for Character stats.")
+end
+
+--- Retrieves an array of all skill stat entry names defined in the engine.
+-- @return table: Array of skill stat template identifier strings.
+local function ExtGetSkillStatNames()
+    -- Check if modern Ext.Stats.GetStats API is available (Extender v56+)
+    if Ext.Stats and Ext.Stats.GetStats then
+        -- Call library function Ext.Stats.GetStats(type: string) -> table
+        -- Parameter: "SkillData" (type: string) - stat table category
+        return Ext.Stats.GetStats("SkillData")
+    -- Check if intermediate Ext.Stats.GetStatEntries API is available
+    elseif Ext.Stats and Ext.Stats.GetStatEntries then
+        -- Call library function Ext.Stats.GetStatEntries(type: string) -> table
+        -- Parameter: "SkillData" (type: string) - stat table category
+        return Ext.Stats.GetStatEntries("SkillData")
+    -- Fallback to legacy Ext.GetStatEntries API
+    elseif Ext.GetStatEntries then
+        -- Call library function Ext.GetStatEntries(type: string) -> table
+        -- Parameter: "SkillData" (type: string) - stat table category
+        return Ext.GetStatEntries("SkillData")
+    end
+    -- Throw fatal error if no Extender stat listing function exists for SkillData
+    error("[DifficultyMod] Critical: Neither Ext.Stats.GetStats nor Ext.GetStatEntries API is available for SkillData.")
+end
+
+--- Retrieves a root template object from the engine by its GUID string.
+-- @param guid string: The root template GUID string.
+-- @return table|userdata|nil: The root template object if found, nil if GUID is empty.
+local function ExtGetRootTemplate(guid)
+    -- Return nil immediately if guid is invalid or empty
+    if not guid or guid == "" then return nil end
+    -- Check if modern Ext.Template.GetRootTemplate API is available
+    if Ext.Template and Ext.Template.GetRootTemplate then
+        return Ext.Template.GetRootTemplate(guid)
+    -- Fallback to Ext.Template.GetTemplate API
+    elseif Ext.Template and Ext.Template.GetTemplate then
+        return Ext.Template.GetTemplate(guid)
+    end
+    -- Return nil if root template inspection subsystem is not supported in this extender build
+    return nil
 end
 
 --- Retrieves a character entity object by its GUID string.
@@ -128,6 +168,43 @@ local function ExtSubscribeStatsLoaded(handler)
         -- Throw fatal error if StatsLoaded subscription mechanism is missing
         error("[DifficultyMod] Critical: Ext.Events.StatsLoaded subscription API is missing.")
     end
+end
+
+--- Checks whether a character instance is a registered Osiris summon.
+-- @param guid string|nil: The character's world GUID string (e.g. "S_GLO_Character_...").
+-- @return boolean: True if the character is confirmed as a summon by Osiris, false if guid is empty.
+local function OsiIsSummon(guid)
+    -- Return false immediately if GUID string is empty or nil
+    if not guid or guid == "" then return false end
+    -- Check if Osiris environment and query CharacterIsSummon are available
+    if Osi and Osi.CharacterIsSummon then
+        -- Call Osiris query Osi.CharacterIsSummon(guid: string) -> integer (1=true, 0=false)
+        return Osi.CharacterIsSummon(guid) == 1
+    end
+    -- Throw fatal error if Osiris or CharacterIsSummon query API is unavailable
+    error("[DifficultyMod] Critical: Osi.CharacterIsSummon query API is missing.")
+end
+
+--- Retrieves the owner/master character GUID of a summon instance.
+-- @param guid string|nil: The summon character's world GUID string.
+-- @return string|nil: The owner character GUID string if present and valid, nil if not a summon or guid is empty.
+local function OsiGetOwnerCharacter(guid)
+    -- Return nil immediately if GUID string is empty or nil
+    if not guid or guid == "" then return nil end
+    -- If entity is not a summon, do not invoke CharacterGetOwnerCharacter to avoid Osiris query failure
+    if not OsiIsSummon(guid) then return nil end
+    -- Check if Osiris environment and query CharacterGetOwnerCharacter are available
+    if Osi and Osi.CharacterGetOwnerCharacter then
+        -- Call Osiris query Osi.CharacterGetOwnerCharacter(guid: string) -> string (owner GUID)
+        local owner = Osi.CharacterGetOwnerCharacter(guid)
+        -- Validate that owner GUID is non-empty and does not match the null GUID constant
+        if owner and owner ~= "" and owner ~= "NULL_00000000-0000-0000-0000-000000000000" then
+            return owner
+        end
+        return nil
+    end
+    -- Throw fatal error if Osiris or CharacterGetOwnerCharacter query API is unavailable
+    error("[DifficultyMod] Critical: Osi.CharacterGetOwnerCharacter query API is missing.")
 end
 
 --------------------------------------------------------------------------------
@@ -260,29 +337,107 @@ local GainTierMultipliers = {
     ["Large"]      = 2.00, -- Elite enemies, champions, mini-bosses, strong melee (200% base XP)
     ["5"]          = 2.00, -- String enum representation of Large (200% base XP)
     [5]            = 2.00, -- Integer enum representation of Large (200% base XP)
-    ["6"]          = 3.00, -- String enum representation of Mini-bosses (300% base XP)
-    [6]            = 3.00, -- Integer enum representation of Mini-bosses (300% base XP)
-    ["ExtraLarge"] = 4.00, -- Major act bosses and pivotal story encounters (400% base XP)
+    ["6"]          = 3.00, -- String enum representation of Major mini-bosses (300% base XP)
+    [6]            = 3.00, -- Integer enum representation of Major mini-bosses (300% base XP)
+    ["ExtraLarge"] = 4.00, -- Major act bosses, act-end antagonists (400% base XP)
     ["7"]          = 4.00, -- String enum representation of ExtraLarge (400% base XP)
     [7]            = 4.00, -- Integer enum representation of ExtraLarge (400% base XP)
-    ["8"]          = 5.00, -- Apex / Super-boss encounters (500% base XP)
-    [8]            = 5.00,
-    ["9"]          = 6.00, -- Unique legendary encounters (600% base XP)
-    [9]            = 6.00,
+    ["8"]          = 5.00, -- String enum representation of Legendary bosses (500% base XP)
+    [8]            = 5.00, -- Integer enum representation of Legendary bosses (500% base XP)
+    ["9"]          = 6.00, -- String enum representation of Supreme bosses (600% base XP)
+    [9]            = 6.00, -- Integer enum representation of Supreme bosses (600% base XP)
     ["10"]         = 8.00, -- Maximum cap tier (800% base XP)
     [10]           = 8.00
 }
 
--- Global cache storing the original unmodified Gain tier for each character template name
-local TemplateOriginalGain = {}
+--------------------------------------------------------------------------------
+-- Section 4: Template Identification & Dynamic Skill Introspection
+--------------------------------------------------------------------------------
 
---------------------------------------------------------------------------------
--- Section 4: Template Identification & Inheritance Helpers
---------------------------------------------------------------------------------
+-- Global table storing dynamically discovered summon character template names from SkillData
+SummonTemplates = {}
+
+-- Global table storing pristine original stat properties for ALL character templates (heroes, summons, enemies)
+OriginalStats = {}
+
+--- Safely extracts the character stat entry name from a RootTemplate object across different template subclasses.
+-- @param rootTpl userdata|table|nil: The root template object to inspect.
+-- @return string|nil: The character stat entry name if present, nil otherwise.
+local function SafeGetTemplateStat(rootTpl)
+    if not rootTpl then return nil end
+    local ok, stat = pcall(function()
+        return rootTpl.Stats or rootTpl.StatsId or rootTpl.StatsEntryName
+    end)
+    if ok and stat and stat ~= "" then
+        return stat
+    end
+    return nil
+end
+
+--- Checks whether a string matches standard GUID format (8-4-4-4-12 hex digits).
+-- @param str string|nil: The string to inspect.
+-- @return boolean: True if str is a GUID format, false otherwise.
+local function IsGuidString(str)
+    if type(str) ~= "string" then return false end
+    return string.match(str, "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") ~= nil
+end
+
+--- Dynamically inspects all SkillData entries to discover character templates used by summon skills.
+-- @return nil
+local function DiscoverSummonTemplates()
+    SummonTemplates = {}
+    -- Retrieve all SkillData entry names; fails loudly with fatal error if API is unavailable
+    local skillEntries = ExtGetSkillStatNames()
+    if not skillEntries or type(skillEntries) ~= "table" then
+        error("[DifficultyMod] Critical: Failed to retrieve SkillData entries from stats engine.")
+    end
+
+    -- Iterate through each registered skill template to inspect summoning properties
+    for _, skillName in pairs(skillEntries) do
+        local skill = ExtGetStat(skillName)
+        if skill then
+            local tpl = skill.Template
+            if tpl and tpl ~= "" then
+                -- Check if Template refers to a RootTemplate GUID containing a character stat
+                local rootTpl = ExtGetRootTemplate(tpl)
+                local statName = SafeGetTemplateStat(rootTpl)
+                if statName then
+                    SummonTemplates[statName] = "skill template indirectly"
+                -- Fallback: check if Template directly matches a Character stat template (skip if it is a GUID)
+                elseif not IsGuidString(tpl) and ExtGetStat(tpl) then
+                    SummonTemplates[tpl] = "skill template directly"
+                end
+            end
+
+            -- Inspect SkillProperties for explicit SUMMON actions
+            if skill.SkillProperties then
+                for _, prop in pairs(skill.SkillProperties) do
+                    if (prop.Action == "SUMMON" or prop.Action == "Summon") and prop.Arg1 and prop.Arg1 ~= "" then
+                        local rootTpl = ExtGetRootTemplate(prop.Arg1)
+                        local statName = SafeGetTemplateStat(rootTpl)
+                        if statName then
+                            SummonTemplates[statName] = "SkillProperties indirectly"
+                        elseif not IsGuidString(prop.Arg1) and ExtGetStat(prop.Arg1) then
+                            SummonTemplates[prop.Arg1] = "SkillProperties directly"
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    -- Print discovered summon templates and their discovery source to console
+    local count = 0
+    for templateName, source in pairs(SummonTemplates) do
+        count = count + 1
+        PrintLog(string.format("Discovered summon template: %s (Source: %s)", tostring(templateName), tostring(source)))
+    end
+    PrintLog(string.format("Total summon templates discovered: %d", count))
+end
 
 --- Checks whether a stat entry name belongs to or inherits from the playable hero archetype _Hero.
 -- @param name string|nil: The template stat identifier name from Character.txt.
--- @return boolean: True if the template inherits from _Hero (player/companion archetype), false otherwise.
+-- @return boolean: True if the template is _Hero or inherits from _Hero (player/companion archetype), false otherwise.
 local function IsPlayerOrHeroStat(name)
     -- Return true if name is nil or empty to protect undefined structures
     if not name or name == "" then return true end
@@ -362,6 +517,9 @@ end
 --- Iterates over all character templates in memory to apply stat scaling and cache Gain tiers.
 -- @return nil
 local function ApplyDifficultyScaling()
+    -- Dynamically discover all summon templates registered in SkillData
+    DiscoverSummonTemplates()
+
     -- If all feature flags are false, all multipliers are 1.0x (vanilla); exit immediately with zero overhead
     if not (ShouldSyncLiveStats or ShouldOverrideCombatXP) then
         PrintLog("All multipliers are 1.0x (vanilla). In-memory difficulty scaling skipped.")
@@ -373,41 +531,33 @@ local function ApplyDifficultyScaling()
     -- Counter tracking the number of modified character templates
     local modifiedCount = 0
 
-    -- Table storing the pristine unmutated stat values for all templates captured in Pass 1
-    local OriginalStats = {}
+    -- Reset global OriginalStats table
+    OriginalStats = {}
 
     -- =========================================================================
-    -- PASS 1: Read and capture pristine original data for all character templates
+    -- PASS 1: Read and capture pristine original data for ALL character templates
     -- =========================================================================
 
-    -- Capture pristine original data for all non-hero character templates (including root template _Base)
-    -- Call standard library function pairs(t: table) -> (iterator_function, table, nil)
-    -- Parameter: charEntries (type: table) - array of character stat template names
     for _, name in pairs(charEntries) do
-        -- Exclude player and companion hero templates (descendants of _Hero)
-        if not IsPlayerOrHeroStat(name) then
-            -- Call ExtGetStat(name: string) -> table|userdata|nil
-            local stat = ExtGetStat(name)
-            -- Verify stat structure exists for this template name
-            if stat then
-                -- Only resolve and cache Gain tier when custom XP override is active
-                local resolvedGain = nil
-                if ShouldOverrideCombatXP then
-                    -- Call GetResolvedTemplateGain(statName: string) -> string to traverse unmutated hierarchy
-                    resolvedGain = GetResolvedTemplateGain(name)
-                    -- Store original Gain tier in global lookup table for runtime kill XP calculation
-                    TemplateOriginalGain[name] = resolvedGain
-                end
-
-                -- Snapshot pristine original properties before any in-memory mutation begins
-                OriginalStats[name] = {
-                    Using = (stat.Using and stat.Using ~= "" and stat.Using ~= name) and stat.Using or nil,
-                    Vitality = stat.Vitality,
-                    Armor = stat.Armor,
-                    MagicArmor = stat.MagicArmor,
-                    Gain = resolvedGain
-                }
+        -- Call ExtGetStat(name: string) -> table|userdata|nil
+        local stat = ExtGetStat(name)
+        -- Verify stat structure exists for this template name
+        if stat then
+            -- Only resolve and cache Gain tier when custom XP override is active
+            local resolvedGain = nil
+            if ShouldOverrideCombatXP then
+                -- Call GetResolvedTemplateGain(statName: string) -> string to traverse unmutated hierarchy
+                resolvedGain = GetResolvedTemplateGain(name)
             end
+
+            -- Snapshot pristine original properties before any in-memory mutation begins
+            OriginalStats[name] = {
+                Using = (stat.Using and stat.Using ~= "" and stat.Using ~= name) and stat.Using or nil,
+                Vitality = stat.Vitality,
+                Armor = stat.Armor,
+                MagicArmor = stat.MagicArmor,
+                Gain = resolvedGain
+            }
         end
     end
 
@@ -415,66 +565,37 @@ local function ApplyDifficultyScaling()
     -- PASS 2: Apply in-memory stat scaling and suppress native engine kill XP
     -- =========================================================================
 
-    -- Iterate over all non-hero character templates to scale stats and zero-out Gain
-    -- Call standard library function pairs(t: table) -> (iterator_function, table, nil)
-    -- Parameter: charEntries (type: table) - array of character stat template names
+    -- Iterate over non-hero, non-summon, non-abstract character templates to scale stats and zero-out Gain
     for _, name in pairs(charEntries) do
-        -- Exclude player and companion hero templates (descendants of _Hero)
-        if not IsPlayerOrHeroStat(name) then
+        -- Exclude abstract archetype templates (starting with "_"), player/companion hero templates, and summon templates
+        if string.sub(name, 1, 1) ~= "_" and not IsPlayerOrHeroStat(name) and not SummonTemplates[name] then
             -- Call ExtGetStat(name: string) -> table|userdata|nil
             local stat = ExtGetStat(name)
             local orig = OriginalStats[name]
             -- Verify stat structure and snapshot data exist for this template name
             if stat and orig then
-                -- Retrieve parent snapshot data from pristine OriginalStats table
-                local origParent = orig.Using and OriginalStats[orig.Using] or nil
-
                 -- Boolean flag indicating if any property on this stat was modified
                 local modified = false
 
-                -- Vitality: Scale explicit overrides (or root templates where origParent is nil)
-                if ShouldScaleVitality then
-                    local baseVit = orig.Vitality
-                    local parentVit = origParent and origParent.Vitality or nil
-                    -- Check if template specifies a positive Vitality value
-                    if baseVit and baseVit > 0 then
-                        -- Scale if template is a root (no parent) or explicitly overrides parent value
-                        if not parentVit or baseVit ~= parentVit then
-                            -- Call math.floor(x: number) -> integer for scaled vitality
-                            stat.Vitality = math.floor(baseVit * Config.EnemyVitalityMultiplier)
-                            modified = true
-                        end
-                    end
+                -- Vitality: Scale based directly on pristine snapshot value
+                if ShouldScaleVitality and orig.Vitality and orig.Vitality > 0 then
+                    -- Call math.floor(x: number) -> integer for scaled vitality
+                    stat.Vitality = math.floor(orig.Vitality * Config.EnemyVitalityMultiplier)
+                    modified = true
                 end
 
-                -- Physical Armour: Scale explicit overrides that differ from pristine parent value
-                if ShouldScalePhysicalArmour then
-                    local baseArm = orig.Armor
-                    local parentArm = origParent and origParent.Armor or nil
-                    -- Check if template specifies a positive Physical Armour value
-                    if baseArm and baseArm > 0 then
-                        -- Scale if no parent exists or value differs from pristine parent
-                        if not parentArm or baseArm ~= parentArm then
-                            -- Call math.floor(x: number) -> integer for scaled armour
-                            stat.Armor = math.floor(baseArm * Config.EnemyPhysicalArmourMultiplier)
-                            modified = true
-                        end
-                    end
+                -- Physical Armour: Scale based directly on pristine snapshot value
+                if ShouldScalePhysicalArmour and orig.Armor and orig.Armor > 0 then
+                    -- Call math.floor(x: number) -> integer for scaled armour
+                    stat.Armor = math.floor(orig.Armor * Config.EnemyPhysicalArmourMultiplier)
+                    modified = true
                 end
 
-                -- Magic Armour: Scale explicit overrides that differ from pristine parent value
-                if ShouldScaleMagicArmour then
-                    local baseMagicArm = orig.MagicArmor
-                    local parentMagicArm = origParent and origParent.MagicArmor or nil
-                    -- Check if template specifies a positive Magic Armour value
-                    if baseMagicArm and baseMagicArm > 0 then
-                        -- Scale if no parent exists or value differs from pristine parent
-                        if not parentMagicArm or baseMagicArm ~= parentMagicArm then
-                            -- Call math.floor(x: number) -> integer for scaled magic armour
-                            stat.MagicArmor = math.floor(baseMagicArm * Config.EnemyMagicArmourMultiplier)
-                            modified = true
-                        end
-                    end
+                -- Magic Armour: Scale based directly on pristine snapshot value
+                if ShouldScaleMagicArmour and orig.MagicArmor and orig.MagicArmor > 0 then
+                    -- Call math.floor(x: number) -> integer for scaled magic armour
+                    stat.MagicArmor = math.floor(orig.MagicArmor * Config.EnemyMagicArmourMultiplier)
+                    modified = true
                 end
 
                 -- Suppress engine native kill XP reward so custom multiplier can be awarded dynamically
@@ -537,11 +658,38 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     if char.PlayerCustomData ~= nil then return end
     -- Exclude origin hero / player archetype templates
     if char.Stats.Name and IsPlayerOrHeroStat(char.Stats.Name) then return end
+
     -- Check Osiris player and party status
     if Osi and guid then
         -- Call library function Osi.CharacterIsPlayer(guid: string) -> integer (1=true, 0=false)
         -- Call library function Osi.CharacterIsPartyMember(guid: string) -> integer (1=true, 0=false)
         if Osi.CharacterIsPlayer(guid) == 1 or Osi.CharacterIsPartyMember(guid) == 1 then
+            return
+        end
+    end
+
+    -- Determine if entity is a summon and safely resolve master/owner
+    local isSummon = false
+    local master = nil
+
+    if guid and OsiIsSummon(guid) then
+        isSummon = true
+        master = OsiGetOwnerCharacter(guid)
+    elseif char.Stats.Name and SummonTemplates[char.Stats.Name] then
+        isSummon = true
+    end
+
+    -- If entity is a summon owned by player or party, exclude from scaling (100% vanilla)
+    if isSummon and master then
+        if Osi and (Osi.CharacterIsPlayer(master) == 1 or Osi.CharacterIsPartyMember(master) == 1) then
+            return
+        end
+    end
+
+    -- Exclude player-owned entities via Extender entity handle
+    if char.OwnerHandle and char.OwnerHandle ~= 0 and char.OwnerHandle ~= 0xFFFFFFFF then
+        local owner = (Ext.Entity and Ext.Entity.GetCharacter and Ext.Entity.GetCharacter(char.OwnerHandle)) or (Ext.GetCharacter and Ext.GetCharacter(char.OwnerHandle))
+        if owner and (owner.PlayerCustomData ~= nil or (Osi and (Osi.CharacterIsPlayer(owner.MyGuid) == 1 or Osi.CharacterIsPartyMember(owner.MyGuid) == 1))) then
             return
         end
     end
@@ -555,7 +703,25 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     local maxMagicArm = stats.MaxMagicArmor or 0
     local curMagicArm = stats.CurrentMagicArmor or 0
 
-    -- Scale Current Vitality proportionally up to MaxVitality
+
+    -- If this is an enemy summon, scale its live max and current stats
+    if isSummon then
+        if ShouldScaleVitality and maxVit > 0 and curVit > 0 then
+            local scaledVit = math.min(maxVit, math.floor(curVit * Config.EnemyVitalityMultiplier))
+            stats.CurrentVitality = scaledVit
+        end
+        if ShouldScalePhysicalArmour and maxArm > 0 and curArm > 0 then
+            local scaledArm = math.min(maxArm, math.floor(curArm * Config.EnemyPhysicalArmourMultiplier))
+            stats.CurrentArmor = scaledArm
+        end
+        if ShouldScaleMagicArmour and maxMagicArm > 0 and curMagicArm > 0 then
+            local scaledMagicArm = math.min(maxMagicArm, math.floor(curMagicArm * Config.EnemyMagicArmourMultiplier))
+            stats.CurrentMagicArmor = scaledMagicArm
+        end
+        return
+    end
+
+    -- For standard loaded enemies: scale Current Vitality proportionally up to MaxVitality
     if ShouldScaleVitality and maxVit > 0 and curVit > 0 and curVit < maxVit then
         -- Call math.min(x: number, y: number) -> number and math.floor(x: number) -> integer
         local scaledVit = math.min(maxVit, math.floor(curVit * Config.EnemyVitalityMultiplier))
@@ -716,8 +882,7 @@ local function RegisterServerEvents()
         end
 
         -- Exclude summons from awarding kill XP (neither player nor enemy summons award kill XP)
-        -- Call Osiris query Osi.CharacterIsSummon(char: string) -> integer (1=true, 0=false)
-        if Osi.CharacterIsSummon(charGuid) == 1 then
+        if OsiIsSummon(charGuid) then
             return
         end
 
@@ -740,8 +905,9 @@ local function RegisterServerEvents()
             end
         end
 
-        -- Retrieve the cached original Gain tier for this enemy's template name (defaulting to "None" if unresolvable)
-        local gainTier = (templateName and TemplateOriginalGain[templateName]) or "None"
+        -- Retrieve the cached original Gain tier from OriginalStats (defaulting to "None" if unresolvable)
+        local orig = templateName and OriginalStats[templateName]
+        local gainTier = (orig and orig.Gain) or "None"
         -- Look up the numerical multiplier from GainTierMultipliers table
         local tierMultiplier = GainTierMultipliers[gainTier]
         -- If not matched in dictionary, attempt numeric conversion with formula fallback
