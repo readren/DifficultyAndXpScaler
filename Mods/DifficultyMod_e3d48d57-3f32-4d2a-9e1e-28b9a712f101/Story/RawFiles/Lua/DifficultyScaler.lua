@@ -704,47 +704,62 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     local curMagicArm = stats.CurrentMagicArmor or 0
 
 
-    -- If this is an enemy summon, scale its live max and current stats
+    -- If this is an enemy summon, ensure its live stats match its scaled max stats
     if isSummon then
-        if ShouldScaleVitality and maxVit > 0 and curVit > 0 then
-            local scaledVit = math.min(maxVit, math.floor(curVit * Config.EnemyVitalityMultiplier))
-            stats.CurrentVitality = scaledVit
+        if ShouldScaleVitality and maxVit > 0 and curVit > 0 and curVit < maxVit then
+            stats.CurrentVitality = maxVit
         end
-        if ShouldScalePhysicalArmour and maxArm > 0 and curArm > 0 then
-            local scaledArm = math.min(maxArm, math.floor(curArm * Config.EnemyPhysicalArmourMultiplier))
-            stats.CurrentArmor = scaledArm
+        if ShouldScalePhysicalArmour and maxArm > 0 and curArm > 0 and curArm < maxArm then
+            stats.CurrentArmor = maxArm
         end
-        if ShouldScaleMagicArmour and maxMagicArm > 0 and curMagicArm > 0 then
-            local scaledMagicArm = math.min(maxMagicArm, math.floor(curMagicArm * Config.EnemyMagicArmourMultiplier))
-            stats.CurrentMagicArmor = scaledMagicArm
+        if ShouldScaleMagicArmour and maxMagicArm > 0 and curMagicArm > 0 and curMagicArm < maxMagicArm then
+            stats.CurrentMagicArmor = maxMagicArm
         end
         return
     end
 
-    -- For standard loaded enemies: scale Current Vitality proportionally up to MaxVitality
+    -- Proportional scaling for standard loaded enemies:
+    -- If enemy was at full vanilla health (curVit >= vanillaMaxVit), restore to full maxVit.
+    -- If enemy was injured (curVit < vanillaMaxVit), scale proportionally to preserve relative damage state.
     if ShouldScaleVitality and maxVit > 0 and curVit > 0 and curVit < maxVit then
-        -- Call math.min(x: number, y: number) -> number and math.floor(x: number) -> integer
-        local scaledVit = math.min(maxVit, math.floor(curVit * Config.EnemyVitalityMultiplier))
-        stats.CurrentVitality = scaledVit
-        -- If vitality reached maximum and procedure exists, fully restore character state
-        if Osi and guid and scaledVit >= maxVit and Osi.Proc_CharacterFullRestore then
-            -- Call Osiris procedure Osi.Proc_CharacterFullRestore(guid: string) -> nil
-            Osi.Proc_CharacterFullRestore(guid)
+        local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
+        local vanillaMaxVit = math.floor(maxVit / vitFactor + 0.5)
+        if vanillaMaxVit > 0 and curVit < vanillaMaxVit then
+            -- Scale proportionally to preserve injured health percentage
+            stats.CurrentVitality = math.min(maxVit, math.max(1, math.floor(maxVit * (curVit / vanillaMaxVit) + 0.5)))
+        else
+            -- Enemy was at full health in the savegame
+            stats.CurrentVitality = maxVit
+            -- If procedure exists, fully restore character state
+            if Osi and guid and Osi.Proc_CharacterFullRestore then
+                -- Call Osiris procedure Osi.Proc_CharacterFullRestore(guid: string) -> nil
+                Osi.Proc_CharacterFullRestore(guid)
+            end
         end
     end
 
-    -- Scale Current Physical Armour proportionally up to MaxArmor
+    -- Proportional scaling for Physical Armour:
     if ShouldScalePhysicalArmour and maxArm > 0 and curArm > 0 and curArm < maxArm then
-        -- Call math.min(x: number, y: number) -> number and math.floor(x: number) -> integer
-        local scaledArm = math.min(maxArm, math.floor(curArm * Config.EnemyPhysicalArmourMultiplier))
-        stats.CurrentArmor = scaledArm
+        local armFactor = Config.EnemyPhysicalArmourMultiplier or 1.0
+        local vanillaMaxArm = math.floor(maxArm / armFactor + 0.5)
+        if vanillaMaxArm > 0 and curArm < vanillaMaxArm then
+            -- Scale proportionally to preserve damaged armour percentage
+            stats.CurrentArmor = math.min(maxArm, math.max(0, math.floor(maxArm * (curArm / vanillaMaxArm) + 0.5)))
+        else
+            stats.CurrentArmor = maxArm
+        end
     end
 
-    -- Scale Current Magic Armour proportionally up to MaxMagicArmor
+    -- Proportional scaling for Magic Armour:
     if ShouldScaleMagicArmour and maxMagicArm > 0 and curMagicArm > 0 and curMagicArm < maxMagicArm then
-        -- Call math.min(x: number, y: number) -> number and math.floor(x: number) -> integer
-        local scaledMagicArm = math.min(maxMagicArm, math.floor(curMagicArm * Config.EnemyMagicArmourMultiplier))
-        stats.CurrentMagicArmor = scaledMagicArm
+        local magicArmFactor = Config.EnemyMagicArmourMultiplier or 1.0
+        local vanillaMaxMagicArm = math.floor(maxMagicArm / magicArmFactor + 0.5)
+        if vanillaMaxMagicArm > 0 and curMagicArm < vanillaMaxMagicArm then
+            -- Scale proportionally to preserve damaged magic armour percentage
+            stats.CurrentMagicArmor = math.min(maxMagicArm, math.max(0, math.floor(maxMagicArm * (curMagicArm / vanillaMaxMagicArm) + 0.5)))
+        else
+            stats.CurrentMagicArmor = maxMagicArm
+        end
     end
 end
 
