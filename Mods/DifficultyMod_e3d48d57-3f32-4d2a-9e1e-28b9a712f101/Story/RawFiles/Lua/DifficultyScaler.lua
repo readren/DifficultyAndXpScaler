@@ -531,6 +531,26 @@ local function ApplyDifficultyScaling()
     -- Counter tracking the number of modified character templates
     local modifiedCount = 0
 
+    -- Create or update in-memory status boost for enemy summons
+    if ShouldSyncLiveStats then
+        local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
+        local boostStat = ExtGetStat("DIFFICULTY_ENEMY_SUMMON_BOOST")
+        if not boostStat then
+            local ok, newStat = pcall(function()
+                return Ext.Stats.Create("DIFFICULTY_ENEMY_SUMMON_BOOST", "StatusData")
+            end)
+            if ok and newStat then
+                boostStat = newStat
+                boostStat.StatusType = "CONSUME"
+            end
+        end
+        if boostStat then
+            boostStat.VitalityPercentage = math.floor((vitFactor - 1.0) * 100 + 0.5)
+            boostStat.ArmorPercentage = math.floor(((Config.EnemyPhysicalArmourMultiplier or 1.0) - 1.0) * 100 + 0.5)
+            boostStat.MagicArmorPercentage = math.floor(((Config.EnemyMagicArmourMultiplier or 1.0) - 1.0) * 100 + 0.5)
+        end
+    end
+
     -- Reset global OriginalStats table
     OriginalStats = {}
 
@@ -704,24 +724,23 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     local curMagicArm = stats.CurrentMagicArmor or 0
     local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
 
-    -- If this is an enemy summon, mutate the live instance via DynamicStats
+    -- If this is an enemy summon, apply the in-memory boost status
     if isSummon and guid then
-        local dyn = stats and stats.DynamicStats and stats.DynamicStats[1]
-        if dyn then
-            if ShouldScaleVitality and maxVit > 0 and curVit > 0 then
-                local scaledMaxVit = math.floor(maxVit * vitFactor + 0.5)
-                dyn.MaxVitality = (dyn.MaxVitality or 0) + (scaledMaxVit - maxVit)
-                stats.CurrentVitality = scaledMaxVit
+        if Osi and Osi.ApplyStatus then
+            Osi.ApplyStatus(guid, "DIFFICULTY_ENEMY_SUMMON_BOOST", -1.0, 1)
+        end
+        if stats then
+            local updatedMaxVit = stats.MaxVitality or 0
+            local updatedMaxArm = stats.MaxArmor or 0
+            local updatedMaxMagicArm = stats.MaxMagicArmor or 0
+            if ShouldScaleVitality and updatedMaxVit > 0 then
+                stats.CurrentVitality = updatedMaxVit
             end
-            if ShouldScalePhysicalArmour and maxArm > 0 and curArm > 0 then
-                local scaledMaxArm = math.floor(maxArm * Config.EnemyPhysicalArmourMultiplier + 0.5)
-                dyn.MaxArmor = (dyn.MaxArmor or 0) + (scaledMaxArm - maxArm)
-                stats.CurrentArmor = scaledMaxArm
+            if ShouldScalePhysicalArmour and updatedMaxArm > 0 then
+                stats.CurrentArmor = updatedMaxArm
             end
-            if ShouldScaleMagicArmour and maxMagicArm > 0 and curMagicArm > 0 then
-                local scaledMaxMagicArm = math.floor(maxMagicArm * Config.EnemyMagicArmourMultiplier + 0.5)
-                dyn.MaxMagicArmor = (dyn.MaxMagicArmor or 0) + (scaledMaxMagicArm - maxMagicArm)
-                stats.CurrentMagicArmor = scaledMaxMagicArm
+            if ShouldScaleMagicArmour and updatedMaxMagicArm > 0 then
+                stats.CurrentMagicArmor = updatedMaxMagicArm
             end
         end
         return
@@ -789,87 +808,123 @@ local function ScaleAllLoadedMapEnemies()
     end
 end
 
---------------------------------------------------------------------------------
--- Section 7: Experience Distribution & Server Event Listeners
---------------------------------------------------------------------------------
-
---- Awards combat experience points to the host player party and any separate multiplayer parties.
--- @param amount integer: The quantity of experience points to award.
--- @return boolean: True if XP was successfully awarded to at least one player party, false otherwise.
-local function AwardPartyCombatExperience(amount)
-    -- Validate that XP amount is positive and Osiris table is accessible
-    if not amount or amount <= 0 or not Osi then return false end
-
-    -- Call Osiris function Osi.CharacterGetHostCharacter() -> string (host GUID)
-    local host = Osi.CharacterGetHostCharacter()
-    -- Set tracking all player GUIDs whose parties have been credited
-    local awardedPlayers = {}
-    -- Boolean tracking overall success of the award operation
-    local success = false
-
-    -- Verify host GUID is valid and not null
-    if host and host ~= "" and host ~= "NULL_00000000-0000-0000-0000-000000000000" then
-        -- Call Osiris function Osi.PartyAddActualExperience(character: string, xp: integer) -> nil
-        -- Parameter 1: host (type: string) - recipient player character GUID
-        -- Parameter 2: amount (type: integer) - raw experience amount
-        Osi.PartyAddActualExperience(host, amount)
-        awardedPlayers[host] = true
-        success = true
+--- Reverts all loaded enemy character instances to vanilla health and armour before savegame serialization.
+-- @return nil
+local function RevertAllLoadedMapEnemiesToVanilla()
+    if not ShouldSyncLiveStats then
+        return
     end
 
-    -- Check if Osiris player database DB_IsPlayer is accessible for multiplayer handling
-    if Osi.DB_IsPlayer then
-        -- Call Osiris DB query Osi.DB_IsPlayer:Get(filter: nil) -> table of {guid}
-        -- Parameter: nil (type: nil) - unfiltered query for all active players
-        local players = Osi.DB_IsPlayer:Get(nil)
-        if players then
-            -- Iterate through each player record in DB_IsPlayer
-            for _, p in ipairs(players) do
-                local playerGuid = p[1]
-                -- Check if player GUID is valid and party has not already received this XP
-                if playerGuid and playerGuid ~= "" and not awardedPlayers[playerGuid] then
-                    local inSameParty = false
-                    -- Check if player is in the same party as host
-                    if host and host ~= "" and Osi.CharacterIsInPartyWith(host, playerGuid) == 1 then
-                        inSameParty = true
-                    end
-                    -- Check if player is in the same party as any other already-awarded player
-                    for otherGuid, _ in pairs(awardedPlayers) do
-                        -- Call Osiris query Osi.CharacterIsInPartyWith(char1: string, char2: string) -> integer (1=true, 0=false)
-                        if Osi.CharacterIsInPartyWith(otherGuid, playerGuid) == 1 then
-                            inSameParty = true
-                            break
-                        end
-                    end
+    local guids = ExtGetAllCharacterGuids()
+    if not guids then return end
 
-                    -- If player belongs to a distinct independent party, award XP to their party
-                    if not inSameParty then
-                        -- Call Osiris function Osi.PartyAddActualExperience(character: string, xp: integer) -> nil
-                        Osi.PartyAddActualExperience(playerGuid, amount)
-                        awardedPlayers[playerGuid] = true
-                        success = true
+    local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
+    local armFactor = Config.EnemyPhysicalArmourMultiplier or 1.0
+    local magicArmFactor = Config.EnemyMagicArmourMultiplier or 1.0
+    local count = 0
+
+    for _, g in ipairs(guids) do
+        local char = ExtGetCharacter(g)
+        if char and char.Stats and char.PlayerCustomData == nil then
+            if not (char.Stats.Name and IsPlayerOrHeroStat(char.Stats.Name)) then
+                if not (Osi and (Osi.CharacterIsPlayer(g) == 1 or Osi.CharacterIsPartyMember(g) == 1)) then
+                    local stats = char.Stats
+                    if ShouldScaleVitality and stats.CurrentVitality and stats.CurrentVitality > 0 then
+                        stats.CurrentVitality = math.max(1, math.floor(stats.CurrentVitality / vitFactor + 0.5))
                     end
+                    if ShouldScalePhysicalArmour and stats.CurrentArmor and stats.CurrentArmor > 0 then
+                        stats.CurrentArmor = math.max(0, math.floor(stats.CurrentArmor / armFactor + 0.5))
+                    end
+                    if ShouldScaleMagicArmour and stats.CurrentMagicArmor and stats.CurrentMagicArmor > 0 then
+                        stats.CurrentMagicArmor = math.max(0, math.floor(stats.CurrentMagicArmor / magicArmFactor + 0.5))
+                    end
+                    -- Strip custom summon boost status so no modded status references exist in the save file
+                    if Osi and Osi.RemoveStatus then
+                        Osi.RemoveStatus(g, "DIFFICULTY_ENEMY_SUMMON_BOOST")
+                    end
+                    count = count + 1
                 end
             end
         end
     end
 
-    -- Fallback: if neither host nor DB_IsPlayer succeeded, try DB_PartyMembers database
-    if not success and Osi.DB_PartyMembers then
-        -- Call Osiris DB query Osi.DB_PartyMembers:Get(filter: nil) -> table of {guid}
-        local members = Osi.DB_PartyMembers:Get(nil)
-        if members and members[1] and members[1][1] then
-            -- Call Osiris function Osi.PartyAddActualExperience(character: string, xp: integer) -> nil
-            Osi.PartyAddActualExperience(members[1][1], amount)
-            success = true
+    PrintLog(string.format("Reverted %d characters to vanilla health/armour for savegame.", count))
+end
+
+--------------------------------------------------------------------------------
+-- Section 7: Experience Distribution & Server Event Listeners
+--------------------------------------------------------------------------------
+
+--- Awards combat experience in a multiplayer game across distinct player parties.
+-- @param amount integer: The quantity of experience points to award.
+-- @param players table: Table of player records from Osi.DB_IsPlayer:Get(nil).
+-- @return boolean: True if XP was awarded to at least one party.
+local function AwardMultiplayerCombatExperience(amount, players)
+    local awardedPlayers = {}
+    local success = false
+
+    for _, p in ipairs(players) do
+        local playerGuid = p[1]
+        if playerGuid and playerGuid ~= "" and not awardedPlayers[playerGuid] then
+            local inSameParty = false
+            for otherGuid, _ in pairs(awardedPlayers) do
+                if Osi.CharacterIsInPartyWith(otherGuid, playerGuid) == 1 then
+                    inSameParty = true
+                    break
+                end
+            end
+
+            if not inSameParty then
+                Osi.CharacterAddExperience(playerGuid, amount)
+                awardedPlayers[playerGuid] = true
+                success = true
+            end
         end
     end
 
-    -- Return overall success status
     return success
 end
 
---- Registers server-side Osiris event listeners for character death, region start, and combat entry.
+--- Awards combat experience points to the player's active party (singleplayer or multiplayer).
+-- @param amount integer: The quantity of experience points to award.
+-- @return boolean: True if XP was successfully awarded to the party.
+local function AwardPartyCombatExperience(amount)
+    -- Validate that XP amount is positive and Osiris table is accessible
+    if not amount or amount <= 0 or not Osi then return false end
+
+    -- Check if multiple players exist in DB_IsPlayer (multiplayer session)
+    if Osi.DB_IsPlayer then
+        local players = Osi.DB_IsPlayer:Get(nil)
+        if players and #players > 1 then
+            -- Delegate to dedicated multiplayer distribution function
+            return AwardMultiplayerCombatExperience(amount, players)
+        elseif players and #players == 1 and players[1] and players[1][1] then
+            -- Single player in DB_IsPlayer
+            Osi.CharacterAddExperience(players[1][1], amount)
+            return true
+        end
+    end
+
+    -- Singleplayer fallback: query host character
+    local host = (Osi.CharacterGetHostCharacter and Osi.CharacterGetHostCharacter()) or nil
+    if host and host ~= "" and host ~= "NULL_00000000-0000-0000-0000-000000000000" then
+        Osi.CharacterAddExperience(host, amount)
+        return true
+    end
+
+    -- Secondary fallback: DB_PartyMembers
+    if Osi.DB_PartyMembers then
+        local members = Osi.DB_PartyMembers:Get(nil)
+        if members and members[1] and members[1][1] then
+            Osi.CharacterAddExperience(members[1][1], amount)
+            return true
+        end
+    end
+
+    return false
+end
+
+--- Registers server-side Osiris event listeners for character death, region start, combat entry, and summoning.
 -- @return nil
 local function RegisterServerEvents()
     -- Assert that Osiris is available in server context
@@ -923,9 +978,9 @@ local function RegisterServerEvents()
             end
         end
 
-        -- Retrieve the cached original Gain tier from OriginalStats (defaulting to "None" if unresolvable)
+        -- Retrieve the cached original Gain tier from OriginalStats (defaulting to "3" if unresolvable)
         local orig = templateName and OriginalStats[templateName]
-        local gainTier = (orig and orig.Gain) or "None"
+        local gainTier = (orig and orig.Gain) or "3"
         -- Look up the numerical multiplier from GainTierMultipliers table
         local tierMultiplier = GainTierMultipliers[gainTier]
         -- If not matched in dictionary, attempt numeric conversion with formula fallback
@@ -943,7 +998,7 @@ local function RegisterServerEvents()
             elseif n == 9 then tierMultiplier = 6.00
             else tierMultiplier = n * 0.75 end
         end
-        tierMultiplier = tierMultiplier or 0.00
+        tierMultiplier = tierMultiplier or 1.00
 
         -- If template Gain tier resolves to 0.0 multiplier, no kill XP should be awarded
         if tierMultiplier <= 0 then
@@ -979,6 +1034,30 @@ local function RegisterServerEvents()
     ExtRegisterOsiris("CharacterEnteredCombat", 2, "after", function(charGuid, combatId)
         -- Call ScaleCharacterCurrentStats(guidOrChar: string) -> nil to scale newly entered combatant
         ScaleCharacterCurrentStats(charGuid)
+    end)
+
+    -- 4. Register listener for CharacterSummoned Osiris event (summons spawned mid-combat)
+    -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
+    ExtRegisterOsiris("CharacterSummoned", 2, "after", function(summonGuid, masterGuid)
+        -- Call ScaleCharacterCurrentStats(guidOrChar: string) -> nil to scale newly created summon
+        ScaleCharacterCurrentStats(summonGuid)
+    end)
+
+    -- 5. Register listener for CharacterCreated Osiris event (dynamically created entities/minions)
+    -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
+    ExtRegisterOsiris("CharacterCreated", 1, "after", function(charGuid)
+        -- Call ScaleCharacterCurrentStats(guidOrChar: string) -> nil to scale newly created entity
+        ScaleCharacterCurrentStats(charGuid)
+    end)
+
+    -- 6. Register listener for SavegameStarted event (revert to vanilla before saving)
+    ExtRegisterOsiris("SavegameStarted", 0, "before", function()
+        RevertAllLoadedMapEnemiesToVanilla()
+    end)
+
+    -- 7. Register listener for SavegameStarted event after serialization (restore modded stats)
+    ExtRegisterOsiris("SavegameStarted", 0, "after", function()
+        ScaleAllLoadedMapEnemies()
     end)
 
     -- Call PrintLog(msg: string) to confirm server event registration
