@@ -492,8 +492,8 @@ local function GetResolvedTemplateGain(statName)
         local stat = ExtGetStat(current)
         -- Break loop if stat object cannot be retrieved from engine
         if not stat then break end
-        -- Check if stat defines an explicit non-empty Gain tier property (accepting 0, "0", "None", etc.)
-        if stat.Gain ~= nil and stat.Gain ~= "" then
+        -- Check if stat defines an explicit non-zero Gain tier property
+        if stat.Gain ~= nil and stat.Gain ~= "" and stat.Gain ~= 0 and stat.Gain ~= "0" and stat.Gain ~= "None" then
             -- Return the explicit Gain tier found on this template as a string
             return tostring(stat.Gain)
         end
@@ -506,8 +506,8 @@ local function GetResolvedTemplateGain(statName)
             break
         end
     end
-    -- Fall back to "None" (0 XP) if hierarchy terminates without declaring a combat Gain tier
-    return "None"
+    -- Fall back to "3" (Medium / 100% standard combat XP) if hierarchy terminates without declaring a tier
+    return "3"
 end
 
 --------------------------------------------------------------------------------
@@ -702,18 +702,27 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     local curArm = stats.CurrentArmor or 0
     local maxMagicArm = stats.MaxMagicArmor or 0
     local curMagicArm = stats.CurrentMagicArmor or 0
+    local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
 
-
-    -- If this is an enemy summon, ensure its live stats match its scaled max stats
-    if isSummon then
-        if ShouldScaleVitality and maxVit > 0 and curVit > 0 and curVit < maxVit then
-            stats.CurrentVitality = maxVit
-        end
-        if ShouldScalePhysicalArmour and maxArm > 0 and curArm > 0 and curArm < maxArm then
-            stats.CurrentArmor = maxArm
-        end
-        if ShouldScaleMagicArmour and maxMagicArm > 0 and curMagicArm > 0 and curMagicArm < maxMagicArm then
-            stats.CurrentMagicArmor = maxMagicArm
+    -- If this is an enemy summon, mutate the live instance via DynamicStats
+    if isSummon and guid then
+        local dyn = stats and stats.DynamicStats and stats.DynamicStats[1]
+        if dyn then
+            if ShouldScaleVitality and maxVit > 0 and curVit > 0 then
+                local scaledMaxVit = math.floor(maxVit * vitFactor + 0.5)
+                dyn.MaxVitality = (dyn.MaxVitality or 0) + (scaledMaxVit - maxVit)
+                stats.CurrentVitality = scaledMaxVit
+            end
+            if ShouldScalePhysicalArmour and maxArm > 0 and curArm > 0 then
+                local scaledMaxArm = math.floor(maxArm * Config.EnemyPhysicalArmourMultiplier + 0.5)
+                dyn.MaxArmor = (dyn.MaxArmor or 0) + (scaledMaxArm - maxArm)
+                stats.CurrentArmor = scaledMaxArm
+            end
+            if ShouldScaleMagicArmour and maxMagicArm > 0 and curMagicArm > 0 then
+                local scaledMaxMagicArm = math.floor(maxMagicArm * Config.EnemyMagicArmourMultiplier + 0.5)
+                dyn.MaxMagicArmor = (dyn.MaxMagicArmor or 0) + (scaledMaxMagicArm - maxMagicArm)
+                stats.CurrentMagicArmor = scaledMaxMagicArm
+            end
         end
         return
     end
@@ -722,7 +731,6 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     -- If enemy was at full vanilla health (curVit >= vanillaMaxVit), restore to full maxVit.
     -- If enemy was injured (curVit < vanillaMaxVit), scale proportionally to preserve relative damage state.
     if ShouldScaleVitality and maxVit > 0 and curVit > 0 and curVit < maxVit then
-        local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
         local vanillaMaxVit = math.floor(maxVit / vitFactor + 0.5)
         if vanillaMaxVit > 0 and curVit < vanillaMaxVit then
             -- Scale proportionally to preserve injured health percentage
@@ -730,11 +738,6 @@ local function ScaleCharacterCurrentStats(guidOrChar)
         else
             -- Enemy was at full health in the savegame
             stats.CurrentVitality = maxVit
-            -- If procedure exists, fully restore character state
-            if Osi and guid and Osi.Proc_CharacterFullRestore then
-                -- Call Osiris procedure Osi.Proc_CharacterFullRestore(guid: string) -> nil
-                Osi.Proc_CharacterFullRestore(guid)
-            end
         end
     end
 
