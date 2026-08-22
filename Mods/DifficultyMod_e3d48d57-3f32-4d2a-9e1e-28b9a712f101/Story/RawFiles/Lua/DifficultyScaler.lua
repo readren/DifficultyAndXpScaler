@@ -81,6 +81,46 @@ local function ExtGetSkillStatNames()
     error("[DifficultyMod] Critical: Neither Ext.Stats.GetStats nor Ext.GetStatEntries API is available for SkillData.")
 end
 
+--- Retrieves an array of all Potion stat entry names defined in the engine.
+-- @return table: Array of Potion stat template identifier strings.
+local function ExtGetPotionStatNames()
+    -- Check if modern Ext.Stats.GetStats API is available (Extender v56+)
+    if Ext.Stats and Ext.Stats.GetStats then
+        local stats = Ext.Stats.GetStats("Potion")
+        if stats and type(stats) == "table" then return stats end
+    -- Check if intermediate Ext.Stats.GetStatEntries API is available
+    elseif Ext.Stats and Ext.Stats.GetStatEntries then
+        local stats = Ext.Stats.GetStatEntries("Potion")
+        if stats and type(stats) == "table" then return stats end
+    -- Fallback to legacy Ext.GetStatEntries API
+    elseif Ext.GetStatEntries then
+        local stats = Ext.GetStatEntries("Potion")
+        if stats and type(stats) == "table" then return stats end
+    end
+    -- Throw fatal error if Potion stat table could not be retrieved
+    error("[DifficultyMod] Critical: Neither Ext.Stats.GetStats nor Ext.GetStatEntries API is available for Potion stats.")
+end
+
+--- Retrieves an array of all StatusData entry names defined in the engine.
+-- @return table: Array of StatusData template identifier strings.
+local function ExtGetStatusStatNames()
+    -- Check if modern Ext.Stats.GetStats API is available (Extender v56+)
+    if Ext.Stats and Ext.Stats.GetStats then
+        local stats = Ext.Stats.GetStats("StatusData")
+        if stats and type(stats) == "table" then return stats end
+    -- Check if intermediate Ext.Stats.GetStatEntries API is available
+    elseif Ext.Stats and Ext.Stats.GetStatEntries then
+        local stats = Ext.Stats.GetStatEntries("StatusData")
+        if stats and type(stats) == "table" then return stats end
+    -- Fallback to legacy Ext.GetStatEntries API
+    elseif Ext.GetStatEntries then
+        local stats = Ext.GetStatEntries("StatusData")
+        if stats and type(stats) == "table" then return stats end
+    end
+    -- Throw fatal error if StatusData table could not be retrieved
+    error("[DifficultyMod] Critical: Neither Ext.Stats.GetStats nor Ext.GetStatEntries API is available for StatusData.")
+end
+
 --- Retrieves a root template object from the engine by its GUID string.
 -- @param guid string: The root template GUID string.
 -- @return table|userdata|nil: The root template object if found, nil if GUID is empty.
@@ -354,11 +394,11 @@ local GainTierMultipliers = {
 -- Section 4: Template Identification & Dynamic Skill Introspection
 --------------------------------------------------------------------------------
 
--- Global table storing dynamically discovered summon character template names from SkillData
-SummonTemplates = {}
+-- File-scoped table storing dynamically discovered summon character template names from SkillData
+local SummonTemplates = {}
 
--- Global table storing pristine original stat properties for ALL character templates (heroes, summons, enemies)
-OriginalStats = {}
+-- File-scoped table storing pristine original stat properties for ALL character templates (heroes, summons, enemies)
+local OriginalStats = {}
 
 --- Safely extracts the character stat entry name from a RootTemplate object across different template subclasses.
 -- @param rootTpl userdata|table|nil: The root template object to inspect.
@@ -531,83 +571,98 @@ local function ApplyDifficultyScaling()
     -- Counter tracking the number of modified character templates
     local modifiedCount = 0
 
-    -- Create or update in-memory Potion and StatusData for enemy summons
+    -- Create or update in-memory Potion and StatusData for enemy summons if stat synchronization is enabled
     if ShouldSyncLiveStats then
+        -- Calculate non-linear vitality exponent factor matching engine level scaling curves
         local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
 
-        -- Dynamically query loaded engine templates to clone from valid runtime objects
+        -- Dynamically query loaded engine Potion prototypes to clone from a valid runtime object
         local basePotion = nil
-        local potionTemplates = (Ext.Stats and Ext.Stats.GetStats and Ext.Stats.GetStats("Potion")) or {}
+        -- Retrieve array of all registered Potion stat template names from engine (fails loudly if unavailable)
+        local potionTemplates = ExtGetPotionStatNames()
         for _, pName in ipairs(potionTemplates) do
             local p = ExtGetStat(pName)
+            -- Select the first prototype defining standard vitality or armour boost fields
             if p and (p.VitalityBoost or p.ArmorBoost or p.MagicArmorBoost) then
                 basePotion = pName
                 break
             end
         end
+        -- Fallback to the first available Potion template if no specific boost prototype was found
         if not basePotion and #potionTemplates > 0 then
             basePotion = potionTemplates[1]
         end
+        -- Fail loudly if no valid Potion prototype could be resolved
+        if not basePotion then
+            error("[DifficultyMod] Critical: Failed to resolve a valid Potion prototype from engine stats.")
+        end
 
+        -- Dynamically query loaded StatusData prototypes to clone from a valid runtime CONSUME status object
         local baseStatus = nil
-        local statusTemplates = (Ext.Stats and Ext.Stats.GetStats and Ext.Stats.GetStats("StatusData")) or {}
+        -- Retrieve array of all registered StatusData template names from engine (fails loudly if unavailable)
+        local statusTemplates = ExtGetStatusStatNames()
         for _, sName in ipairs(statusTemplates) do
             local s = ExtGetStat(sName)
+            -- Select the first prototype matching the CONSUME status type family
             if s and s.StatusType == "CONSUME" then
                 baseStatus = sName
                 break
             end
         end
+        -- Fallback to first available StatusData template if no specific CONSUME status was found
         if not baseStatus and #statusTemplates > 0 then
             baseStatus = statusTemplates[1]
         end
-
-        -- 1. Create or retrieve the Potion stat holding the actual numeric boost percentages
-        local potionStat = ExtGetStat("Difficulty-Mod")
-        if not potionStat then
-            if basePotion then
-                potionStat = Ext.Stats.Create("Difficulty-Mod", "Potion", basePotion)
-            else
-                potionStat = Ext.Stats.Create("Difficulty-Mod", "Potion")
-            end
+        -- Fail loudly if no valid CONSUME status prototype could be resolved
+        if not baseStatus then
+            error("[DifficultyMod] Critical: Failed to resolve a valid CONSUME StatusData prototype from engine stats.")
         end
+
+        -- 1. Create or retrieve the custom Potion stat holding the numeric difficulty boost percentages
+        -- Directly calling Ext.Stats.Create instantiates or retrieves the stat without triggering missing-object warnings
+        local potionStat = Ext.Stats.Create("Difficulty-Mod", "Potion", basePotion)
         if potionStat then
+            -- Explicitly zero-out all inherited primary attributes to prevent unwanted stat leakage
             potionStat.Strength = 0
             potionStat.Finesse = 0
             potionStat.Intelligence = 0
             potionStat.Constitution = 0
             potionStat.Memory = 0
             potionStat.Wits = 0
+            -- Explicitly zero-out all combat ratings and modifiers
             potionStat.AccuracyBoost = 0
             potionStat.DodgeBoost = 0
             potionStat.DamageBoost = 0
             potionStat.CriticalChance = 0
             potionStat.Initiative = 0
+            -- Configure vitality boost percentage calculated from configured vitality multiplier
             potionStat.VitalityBoost = math.floor(((Config.EnemyVitalityMultiplier or 1.0) - 1.0) * 100 + 0.5)
+            -- Configure 1.5x scaled armour boost percentage to compensate for engine level curve divisor
             potionStat.ArmorBoost = math.floor(((Config.EnemyPhysicalArmourMultiplier or 1.0) - 1.0) * 1.5 * 100 + 0.5)
             potionStat.MagicArmorBoost = math.floor(((Config.EnemyMagicArmourMultiplier or 1.0) - 1.0) * 1.5 * 100 + 0.5)
+            -- Set infinite permanent duration for the summon difficulty boost
             potionStat.Duration = -1
+            -- Assign unique stack identifier to manage status stacking behavior
             potionStat.StackId = "Stack_DifficultyMod_Boost"
         end
 
-        -- 2. Create or retrieve the StatusData referencing the Potion via StatsId
-        local boostStat = ExtGetStat("DIFFICULTY_ENEMY_SUMMON_BOOST")
-        if not boostStat then
-            if baseStatus then
-                boostStat = Ext.Stats.Create("DIFFICULTY_ENEMY_SUMMON_BOOST", "StatusData", baseStatus)
-            else
-                boostStat = Ext.Stats.Create("DIFFICULTY_ENEMY_SUMMON_BOOST", "StatusData")
-            end
-        end
+        -- 2. Create or retrieve the custom StatusData referencing the Potion via StatsId
+        -- Directly calling Ext.Stats.Create instantiates or retrieves the StatusData without triggering missing-object warnings
+        local boostStat = Ext.Stats.Create("DIFFICULTY_ENEMY_SUMMON_BOOST", "StatusData", baseStatus)
         if boostStat then
+            -- Assign CONSUME status type required by engine to apply Potion stats via ApplyStatus
             boostStat.StatusType = "CONSUME"
+            -- Link StatusData to the created Difficulty-Mod Potion stat entry
             boostStat.StatsId = "Difficulty-Mod"
+            -- Assign unique stack identifier
             boostStat.StackId = "Stack_DifficultyMod_Boost"
+            -- Configure user-facing examine display name shown on character sheet
             boostStat.DisplayName = "Difficulty-Mod"
+            -- Set examine tooltip icon representing balance and difficulty adjustment
             boostStat.Icon = "statIcons_Reputation"
-            -- boostStat.DisplayNameRef = "DifficultyMod"
+            -- Set examine hover description text explaining the difficulty adjustment
             boostStat.Description = "Due to Difficulty-Mod settings"
-            -- boostStat.DescriptionRef = "DIFFICULTY MOD"
+            -- Set golden format color for status badge display in UI
             boostStat.FormatColor = "Gold"
         end
     end
@@ -785,17 +840,22 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     local curMagicArm = stats.CurrentMagicArmor or 0
     local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
 
-    -- If this is an enemy summon, apply the in-memory boost status
+    -- If this is an enemy summon, apply the in-memory boost status and restore pools to 100%
     if isSummon and guid then
+        -- Check if Osiris ApplyStatus procedure is available in server context
         if Osi and Osi.ApplyStatus then
+            -- Apply custom permanent difficulty boost status to enemy summon (-1.0 = infinite, 1 = forced)
             Osi.ApplyStatus(guid, "DIFFICULTY_ENEMY_SUMMON_BOOST", -1.0, 1)
         end
+        -- Restore Physical Armour to full capacity to match new boosted maximum
         if Osi and Osi.CharacterSetArmorPercentage then
             Osi.CharacterSetArmorPercentage(guid, 100.0)
         end
+        -- Restore Magic Armour to full capacity to match new boosted maximum
         if Osi and Osi.CharacterSetMagicArmorPercentage then
             Osi.CharacterSetMagicArmorPercentage(guid, 100.0)
         end
+        -- Return early as summon stats are managed exclusively via the in-memory boost status
         return
     end
 
@@ -865,13 +925,18 @@ end
 -- @param players table: Table of player records from Osi.DB_IsPlayer:Get(nil).
 -- @return boolean: True if XP was awarded to at least one party.
 local function AwardMultiplayerCombatExperience(amount, players)
+    -- Table tracking GUIDs of players who have already received XP to prevent duplicate awards to shared parties
     local awardedPlayers = {}
+    -- Boolean flag indicating if XP was successfully awarded to at least one party
     local success = false
 
+    -- Iterate through each player record returned from DB_IsPlayer query
     for _, p in ipairs(players) do
         local playerGuid = p[1]
+        -- Process valid, non-empty player GUIDs that have not yet been granted XP
         if playerGuid and playerGuid ~= "" and not awardedPlayers[playerGuid] then
             local inSameParty = false
+            -- Check if this player is in the same party as an already-awarded player
             for otherGuid, _ in pairs(awardedPlayers) do
                 if Osi.CharacterIsInPartyWith(otherGuid, playerGuid) == 1 then
                     inSameParty = true
@@ -879,14 +944,18 @@ local function AwardMultiplayerCombatExperience(amount, players)
                 end
             end
 
+            -- If player is in a distinct party, award XP to their entire party
             if not inSameParty then
+                -- Call Osiris procedure Osi.PartyAddActualExperience(char: string, amount: integer) -> nil
                 Osi.PartyAddActualExperience(playerGuid, amount)
+                -- Mark player as awarded in tracking table
                 awardedPlayers[playerGuid] = true
                 success = true
             end
         end
     end
 
+    -- Return overall distribution success status
     return success
 end
 
@@ -1021,7 +1090,7 @@ local function RegisterServerEvents()
         -- Call AwardPartyCombatExperience(amount: integer) -> boolean to award XP to party
         local success = AwardPartyCombatExperience(scaledXP)
         
-        -- Memorize the died character for which XP has been already granted.
+        -- Memorize the dead character GUID to ensure XP is awarded strictly once per kill
         ProcessedDeadCharacters[charGuid] = true
 
         -- Call PrintLog(msg: string) to log detailed XP reward to debug console
@@ -1029,8 +1098,10 @@ local function RegisterServerEvents()
             scaledXP, tostring(charGuid), tostring(templateName or "Unknown"), gainTier, level, math.floor(baseKillXP), Config.CombatXPMultiplier, tostring(success)))
     end
 
-    -- 1. Register listener for CharacterDied Osiris event (Arity 1: character)
+    -- 1. Register listener for CharacterDied Osiris event (Arity 1: character GUID)
+    -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
     ExtRegisterOsiris("CharacterDied", 1, "after", function(charGuid)
+        -- Process custom scaled kill experience for the defeated character
         HandleCharacterDied(charGuid)
     end)
 
@@ -1042,7 +1113,9 @@ local function RegisterServerEvents()
     end)
 
     -- 3. Register listener for ObjectEnteredCombat Osiris event (fires when any character or summon enters combat)
+    -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
     ExtRegisterOsiris("ObjectEnteredCombat", 2, "after", function(objectGuid, combatId)
+        -- Synchronize live stats or apply summon difficulty boost to entering combatant
         ScaleCharacterCurrentStats(objectGuid)
     end)
 
