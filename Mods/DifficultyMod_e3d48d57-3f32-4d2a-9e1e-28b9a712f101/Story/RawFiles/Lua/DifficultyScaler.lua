@@ -191,20 +191,20 @@ end
 local function OsiGetOwnerCharacter(guid)
     -- Return nil immediately if GUID string is empty or nil
     if not guid or guid == "" then return nil end
-    -- If entity is not a summon, do not invoke CharacterGetOwnerCharacter to avoid Osiris query failure
+    -- If entity is not a summon, do not invoke CharacterGetOwner to avoid Osiris query failure
     if not OsiIsSummon(guid) then return nil end
-    -- Check if Osiris environment and query CharacterGetOwnerCharacter are available
-    if Osi and Osi.CharacterGetOwnerCharacter then
-        -- Call Osiris query Osi.CharacterGetOwnerCharacter(guid: string) -> string (owner GUID)
-        local owner = Osi.CharacterGetOwnerCharacter(guid)
+    -- Check if Osiris environment and query CharacterGetOwner are available
+    if Osi and Osi.CharacterGetOwner then
+        -- Call Osiris query Osi.CharacterGetOwner(guid: string) -> string (owner GUID)
+        local owner = Osi.CharacterGetOwner(guid)
         -- Validate that owner GUID is non-empty and does not match the null GUID constant
         if owner and owner ~= "" and owner ~= "NULL_00000000-0000-0000-0000-000000000000" then
             return owner
         end
         return nil
     end
-    -- Throw fatal error if Osiris or CharacterGetOwnerCharacter query API is unavailable
-    error("[DifficultyMod] Critical: Osi.CharacterGetOwnerCharacter query API is missing.")
+    -- Throw fatal error if Osiris or CharacterGetOwner query API is unavailable
+    error("[DifficultyMod] Critical: Osi.CharacterGetOwner query API is missing.")
 end
 
 --------------------------------------------------------------------------------
@@ -531,23 +531,84 @@ local function ApplyDifficultyScaling()
     -- Counter tracking the number of modified character templates
     local modifiedCount = 0
 
-    -- Create or update in-memory status boost for enemy summons
+    -- Create or update in-memory Potion and StatusData for enemy summons
     if ShouldSyncLiveStats then
         local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
+
+        -- Dynamically query loaded engine templates to clone from valid runtime objects
+        local basePotion = nil
+        local potionTemplates = (Ext.Stats and Ext.Stats.GetStats and Ext.Stats.GetStats("Potion")) or {}
+        for _, pName in ipairs(potionTemplates) do
+            local p = ExtGetStat(pName)
+            if p and (p.VitalityBoost or p.ArmorBoost or p.MagicArmorBoost) then
+                basePotion = pName
+                break
+            end
+        end
+        if not basePotion and #potionTemplates > 0 then
+            basePotion = potionTemplates[1]
+        end
+
+        local baseStatus = nil
+        local statusTemplates = (Ext.Stats and Ext.Stats.GetStats and Ext.Stats.GetStats("StatusData")) or {}
+        for _, sName in ipairs(statusTemplates) do
+            local s = ExtGetStat(sName)
+            if s and s.StatusType == "CONSUME" then
+                baseStatus = sName
+                break
+            end
+        end
+        if not baseStatus and #statusTemplates > 0 then
+            baseStatus = statusTemplates[1]
+        end
+
+        -- 1. Create or retrieve the Potion stat holding the actual numeric boost percentages
+        local potionStat = ExtGetStat("Difficulty-Mod")
+        if not potionStat then
+            if basePotion then
+                potionStat = Ext.Stats.Create("Difficulty-Mod", "Potion", basePotion)
+            else
+                potionStat = Ext.Stats.Create("Difficulty-Mod", "Potion")
+            end
+        end
+        if potionStat then
+            potionStat.Strength = 0
+            potionStat.Finesse = 0
+            potionStat.Intelligence = 0
+            potionStat.Constitution = 0
+            potionStat.Memory = 0
+            potionStat.Wits = 0
+            potionStat.AccuracyBoost = 0
+            potionStat.DodgeBoost = 0
+            potionStat.DamageBoost = 0
+            potionStat.CriticalChance = 0
+            potionStat.Initiative = 0
+            potionStat.VitalityBoost = math.floor(((Config.EnemyVitalityMultiplier or 1.0) - 1.0) * 100 + 0.5)
+            potionStat.ArmorBoost = math.floor(((Config.EnemyPhysicalArmourMultiplier or 1.0) - 1.0) * 1.5 * 100 + 0.5)
+            potionStat.MagicArmorBoost = math.floor(((Config.EnemyMagicArmourMultiplier or 1.0) - 1.0) * 1.5 * 100 + 0.5)
+            potionStat.Duration = -1
+            potionStat.StackId = "Stack_DifficultyMod_Boost"
+        end
+
+        -- 2. Create or retrieve the StatusData referencing the Potion via StatsId
         local boostStat = ExtGetStat("DIFFICULTY_ENEMY_SUMMON_BOOST")
         if not boostStat then
-            local ok, newStat = pcall(function()
-                return Ext.Stats.Create("DIFFICULTY_ENEMY_SUMMON_BOOST", "StatusData")
-            end)
-            if ok and newStat then
-                boostStat = newStat
-                boostStat.StatusType = "CONSUME"
+            if baseStatus then
+                boostStat = Ext.Stats.Create("DIFFICULTY_ENEMY_SUMMON_BOOST", "StatusData", baseStatus)
+            else
+                boostStat = Ext.Stats.Create("DIFFICULTY_ENEMY_SUMMON_BOOST", "StatusData")
             end
         end
         if boostStat then
-            boostStat.VitalityPercentage = math.floor((vitFactor - 1.0) * 100 + 0.5)
-            boostStat.ArmorPercentage = math.floor(((Config.EnemyPhysicalArmourMultiplier or 1.0) - 1.0) * 100 + 0.5)
-            boostStat.MagicArmorPercentage = math.floor(((Config.EnemyMagicArmourMultiplier or 1.0) - 1.0) * 100 + 0.5)
+            boostStat.StatusType = "CONSUME"
+            boostStat.StatsId = "Difficulty-Mod"
+            boostStat.StackId = "Stack_DifficultyMod_Boost"
+            boostStat.DisplayName = "Difficulty-Mod"
+            boostStat.Icon = "statIcons_Reputation"
+            -- boostStat.DisplayNameRef = "DifficultyMod"
+            boostStat.Description = "Due to Difficulty-Mod settings"
+            -- boostStat.DescriptionRef = "DIFFICULTY MOD"
+            boostStat.FormatColor = "Gold"
         end
     end
 
@@ -729,45 +790,34 @@ local function ScaleCharacterCurrentStats(guidOrChar)
         if Osi and Osi.ApplyStatus then
             Osi.ApplyStatus(guid, "DIFFICULTY_ENEMY_SUMMON_BOOST", -1.0, 1)
         end
-        if stats then
-            local updatedMaxVit = stats.MaxVitality or 0
-            local updatedMaxArm = stats.MaxArmor or 0
-            local updatedMaxMagicArm = stats.MaxMagicArmor or 0
-            if ShouldScaleVitality and updatedMaxVit > 0 then
-                stats.CurrentVitality = updatedMaxVit
-            end
-            if ShouldScalePhysicalArmour and updatedMaxArm > 0 then
-                stats.CurrentArmor = updatedMaxArm
-            end
-            if ShouldScaleMagicArmour and updatedMaxMagicArm > 0 then
-                stats.CurrentMagicArmor = updatedMaxMagicArm
-            end
+        if Osi and Osi.CharacterSetArmorPercentage then
+            Osi.CharacterSetArmorPercentage(guid, 100.0)
+        end
+        if Osi and Osi.CharacterSetMagicArmorPercentage then
+            Osi.CharacterSetMagicArmorPercentage(guid, 100.0)
         end
         return
     end
 
     -- Proportional scaling for standard loaded enemies:
-    -- If enemy was at full vanilla health (curVit >= vanillaMaxVit), restore to full maxVit.
-    -- If enemy was injured (curVit < vanillaMaxVit), scale proportionally to preserve relative damage state.
+    -- If enemy was at full vanilla health (within 5% margin of error), scale to full maxVit.
+    -- If enemy was injured (curVit < 95% of vanillaMaxVit), leave CurrentVitality untouched at raw original value!
     if ShouldScaleVitality and maxVit > 0 and curVit > 0 and curVit < maxVit then
         local vanillaMaxVit = math.floor(maxVit / vitFactor + 0.5)
-        if vanillaMaxVit > 0 and curVit < vanillaMaxVit then
-            -- Scale proportionally to preserve injured health percentage
-            stats.CurrentVitality = math.min(maxVit, math.max(1, math.floor(maxVit * (curVit / vanillaMaxVit) + 0.5)))
-        else
-            -- Enemy was at full health in the savegame
+        local vitThreshold = math.floor(vanillaMaxVit * 0.95)
+        if curVit >= vitThreshold then
+            -- Healthy enemy: scale to full max vitality
             stats.CurrentVitality = maxVit
         end
+        -- Injured enemy (curVit < vitThreshold): leave stats.CurrentVitality untouched!
     end
 
     -- Proportional scaling for Physical Armour:
     if ShouldScalePhysicalArmour and maxArm > 0 and curArm > 0 and curArm < maxArm then
         local armFactor = Config.EnemyPhysicalArmourMultiplier or 1.0
         local vanillaMaxArm = math.floor(maxArm / armFactor + 0.5)
-        if vanillaMaxArm > 0 and curArm < vanillaMaxArm then
-            -- Scale proportionally to preserve damaged armour percentage
-            stats.CurrentArmor = math.min(maxArm, math.max(0, math.floor(maxArm * (curArm / vanillaMaxArm) + 0.5)))
-        else
+        local armThreshold = math.floor(vanillaMaxArm * 0.95)
+        if curArm >= armThreshold then
             stats.CurrentArmor = maxArm
         end
     end
@@ -776,10 +826,8 @@ local function ScaleCharacterCurrentStats(guidOrChar)
     if ShouldScaleMagicArmour and maxMagicArm > 0 and curMagicArm > 0 and curMagicArm < maxMagicArm then
         local magicArmFactor = Config.EnemyMagicArmourMultiplier or 1.0
         local vanillaMaxMagicArm = math.floor(maxMagicArm / magicArmFactor + 0.5)
-        if vanillaMaxMagicArm > 0 and curMagicArm < vanillaMaxMagicArm then
-            -- Scale proportionally to preserve damaged magic armour percentage
-            stats.CurrentMagicArmor = math.min(maxMagicArm, math.max(0, math.floor(maxMagicArm * (curMagicArm / vanillaMaxMagicArm) + 0.5)))
-        else
+        local magicArmThreshold = math.floor(vanillaMaxMagicArm * 0.95)
+        if curMagicArm >= magicArmThreshold then
             stats.CurrentMagicArmor = maxMagicArm
         end
     end
@@ -808,49 +856,6 @@ local function ScaleAllLoadedMapEnemies()
     end
 end
 
---- Reverts all loaded enemy character instances to vanilla health and armour before savegame serialization.
--- @return nil
-local function RevertAllLoadedMapEnemiesToVanilla()
-    if not ShouldSyncLiveStats then
-        return
-    end
-
-    local guids = ExtGetAllCharacterGuids()
-    if not guids then return end
-
-    local vitFactor = (Config.EnemyVitalityMultiplier or 1.0) ^ 1.404
-    local armFactor = Config.EnemyPhysicalArmourMultiplier or 1.0
-    local magicArmFactor = Config.EnemyMagicArmourMultiplier or 1.0
-    local count = 0
-
-    for _, g in ipairs(guids) do
-        local char = ExtGetCharacter(g)
-        if char and char.Stats and char.PlayerCustomData == nil then
-            if not (char.Stats.Name and IsPlayerOrHeroStat(char.Stats.Name)) then
-                if not (Osi and (Osi.CharacterIsPlayer(g) == 1 or Osi.CharacterIsPartyMember(g) == 1)) then
-                    local stats = char.Stats
-                    if ShouldScaleVitality and stats.CurrentVitality and stats.CurrentVitality > 0 then
-                        stats.CurrentVitality = math.max(1, math.floor(stats.CurrentVitality / vitFactor + 0.5))
-                    end
-                    if ShouldScalePhysicalArmour and stats.CurrentArmor and stats.CurrentArmor > 0 then
-                        stats.CurrentArmor = math.max(0, math.floor(stats.CurrentArmor / armFactor + 0.5))
-                    end
-                    if ShouldScaleMagicArmour and stats.CurrentMagicArmor and stats.CurrentMagicArmor > 0 then
-                        stats.CurrentMagicArmor = math.max(0, math.floor(stats.CurrentMagicArmor / magicArmFactor + 0.5))
-                    end
-                    -- Strip custom summon boost status so no modded status references exist in the save file
-                    if Osi and Osi.RemoveStatus then
-                        Osi.RemoveStatus(g, "DIFFICULTY_ENEMY_SUMMON_BOOST")
-                    end
-                    count = count + 1
-                end
-            end
-        end
-    end
-
-    PrintLog(string.format("Reverted %d characters to vanilla health/armour for savegame.", count))
-end
-
 --------------------------------------------------------------------------------
 -- Section 7: Experience Distribution & Server Event Listeners
 --------------------------------------------------------------------------------
@@ -875,7 +880,7 @@ local function AwardMultiplayerCombatExperience(amount, players)
             end
 
             if not inSameParty then
-                Osi.CharacterAddExperience(playerGuid, amount)
+                Osi.PartyAddActualExperience(playerGuid, amount)
                 awardedPlayers[playerGuid] = true
                 success = true
             end
@@ -900,7 +905,7 @@ local function AwardPartyCombatExperience(amount)
             return AwardMultiplayerCombatExperience(amount, players)
         elseif players and #players == 1 and players[1] and players[1][1] then
             -- Single player in DB_IsPlayer
-            Osi.CharacterAddExperience(players[1][1], amount)
+            Osi.PartyAddActualExperience(players[1][1], amount)
             return true
         end
     end
@@ -908,7 +913,7 @@ local function AwardPartyCombatExperience(amount)
     -- Singleplayer fallback: query host character
     local host = (Osi.CharacterGetHostCharacter and Osi.CharacterGetHostCharacter()) or nil
     if host and host ~= "" and host ~= "NULL_00000000-0000-0000-0000-000000000000" then
-        Osi.CharacterAddExperience(host, amount)
+        Osi.PartyAddActualExperience(host, amount)
         return true
     end
 
@@ -916,7 +921,7 @@ local function AwardPartyCombatExperience(amount)
     if Osi.DB_PartyMembers then
         local members = Osi.DB_PartyMembers:Get(nil)
         if members and members[1] and members[1][1] then
-            Osi.CharacterAddExperience(members[1][1], amount)
+            Osi.PartyAddActualExperience(members[1][1], amount)
             return true
         end
     end
@@ -933,19 +938,18 @@ local function RegisterServerEvents()
         error("[DifficultyMod] Critical: Osiris global table (Osi) is not available in server context.")
     end
 
-    -- 1. Register listener for CharacterDied Osiris event
-    -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
-    -- Parameter 1: "CharacterDied" (type: string) - Osiris event name
-    -- Parameter 2: 1 (type: integer) - number of event parameters (character GUID)
-    -- Parameter 3: "after" (type: string) - execute handler after engine event processing
-    -- Parameter 4: callback function receiving charGuid (type: string)
-    ExtRegisterOsiris("CharacterDied", 1, "after", function(charGuid)
+    -- Set of character GUIDs that have already awarded kill experience
+    local ProcessedDeadCharacters = {}
+
+    --- Internal death handler calculating and awarding scaled combat experience
+    local function HandleCharacterDied(charGuid, killerGuid)
         -- Exit immediately if custom XP scaling is inactive (1.0 = native engine XP, <= 0 = disabled)
         if not ShouldOverrideCombatXP then
             return
         end
-        -- Verify charGuid is valid
+        -- Verify charGuid is valid and has not already been processed for kill XP
         if not charGuid or charGuid == "" then return end
+        if ProcessedDeadCharacters[charGuid] then return end
 
         -- Exclude players and party members from awarding kill XP
         -- Call Osiris query Osi.CharacterIsPlayer(char: string) -> integer (1=true, 0=false)
@@ -1016,10 +1020,18 @@ local function RegisterServerEvents()
 
         -- Call AwardPartyCombatExperience(amount: integer) -> boolean to award XP to party
         local success = AwardPartyCombatExperience(scaledXP)
+        
+        -- Memorize the died character for which XP has been already granted.
+        ProcessedDeadCharacters[charGuid] = true
 
         -- Call PrintLog(msg: string) to log detailed XP reward to debug console
         PrintLog(string.format("Awarded %d Combat XP (Enemy: %s, Template: %s, Tier: %s, Level: %d, Base: %d, Multiplier: %.2f, Success: %s)",
             scaledXP, tostring(charGuid), tostring(templateName or "Unknown"), gainTier, level, math.floor(baseKillXP), Config.CombatXPMultiplier, tostring(success)))
+    end
+
+    -- 1. Register listener for CharacterDied Osiris event (Arity 1: character)
+    ExtRegisterOsiris("CharacterDied", 1, "after", function(charGuid)
+        HandleCharacterDied(charGuid)
     end)
 
     -- 2. Register listener for RegionStarted Osiris event (savegame load and map transitions)
@@ -1029,35 +1041,9 @@ local function RegisterServerEvents()
         ScaleAllLoadedMapEnemies()
     end)
 
-    -- 3. Register listener for CharacterEnteredCombat Osiris event (newly spawned / ambush enemies)
-    -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
-    ExtRegisterOsiris("CharacterEnteredCombat", 2, "after", function(charGuid, combatId)
-        -- Call ScaleCharacterCurrentStats(guidOrChar: string) -> nil to scale newly entered combatant
-        ScaleCharacterCurrentStats(charGuid)
-    end)
-
-    -- 4. Register listener for CharacterSummoned Osiris event (summons spawned mid-combat)
-    -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
-    ExtRegisterOsiris("CharacterSummoned", 2, "after", function(summonGuid, masterGuid)
-        -- Call ScaleCharacterCurrentStats(guidOrChar: string) -> nil to scale newly created summon
-        ScaleCharacterCurrentStats(summonGuid)
-    end)
-
-    -- 5. Register listener for CharacterCreated Osiris event (dynamically created entities/minions)
-    -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
-    ExtRegisterOsiris("CharacterCreated", 1, "after", function(charGuid)
-        -- Call ScaleCharacterCurrentStats(guidOrChar: string) -> nil to scale newly created entity
-        ScaleCharacterCurrentStats(charGuid)
-    end)
-
-    -- 6. Register listener for SavegameStarted event (revert to vanilla before saving)
-    ExtRegisterOsiris("SavegameStarted", 0, "before", function()
-        RevertAllLoadedMapEnemiesToVanilla()
-    end)
-
-    -- 7. Register listener for SavegameStarted event after serialization (restore modded stats)
-    ExtRegisterOsiris("SavegameStarted", 0, "after", function()
-        ScaleAllLoadedMapEnemies()
+    -- 3. Register listener for ObjectEnteredCombat Osiris event (fires when any character or summon enters combat)
+    ExtRegisterOsiris("ObjectEnteredCombat", 2, "after", function(objectGuid, combatId)
+        ScaleCharacterCurrentStats(objectGuid)
     end)
 
     -- Call PrintLog(msg: string) to confirm server event registration
