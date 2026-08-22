@@ -9,9 +9,9 @@
                 <node id="ModuleInfo">
                     <attribute id="Author" value="Readren" type="30" />
                     <attribute id="CharacterCreationLevelName" value="" type="22" />
-                    <attribute id="Description" value="Scales enemy Vitality, Physical Armour, Magic Armour, and adjusts battle XP." type="30" />
-                    <attribute id="DescriptionName" value="" type="28" handle="ls::TranslatedStringRepository::s_HandleUnknown" />
-                    <attribute id="DisplayName" value="" type="28" handle="ls::TranslatedStringRepository::s_HandleUnknown" />
+                    <attribute id="Description" value="Modular difficulty and XP scaler. Independently scales enemy Vitality, Physical/Magic Armour, and summons, and adjusts combat XP without stat overrides. Requires Script Extender v56+. GitHub: https://github.com/readren/DifficultyAndXpScaler" type="30" />
+                    <attribute id="DescriptionName" value="" handle="ls::TranslatedStringRepository::s_HandleUnknown" type="28" />
+                    <attribute id="DisplayName" value="" handle="ls::TranslatedStringRepository::s_HandleUnknown" type="28" />
                     <attribute id="Folder" value="DifficultyMod_e3d48d57-3f32-4d2a-9e1e-28b9a712f101" type="30" />
                     <attribute id="GMTemplate" value="" type="22" />
                     <attribute id="LobbyLevelName" value="" type="22" />
