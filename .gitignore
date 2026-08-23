@@ -1,6 +1,7 @@
 # Ignore built mod archives and logs
 *.pak
 *.log
+logs/
 __pycache__/
 *.pyc
 Character_Stats_Spreadsheet.csv

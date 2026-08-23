@@ -24,10 +24,10 @@
                     <attribute id="Tags" value="" type="30" />
                     <attribute id="Type" value="Add-on" type="22" />
                     <attribute id="UUID" value="e3d48d57-3f32-4d2a-9e1e-28b9a712f101" type="22" />
-                    <attribute id="Version" value="268435456" type="4" />
+                    <attribute id="Version" value="268500992" type="4" />
                     <children>
                         <node id="PublishVersion">
-                            <attribute id="Version" value="909321303" type="4" />
+                            <attribute id="Version" value="909321304" type="4" />
                         </node>
                         <node id="Scripts" />
                         <node id="TargetModes">

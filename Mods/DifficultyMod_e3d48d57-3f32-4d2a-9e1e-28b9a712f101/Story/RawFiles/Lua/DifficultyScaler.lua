@@ -207,6 +207,106 @@ local function OsiGetOwnerCharacter(guid)
     error("[DifficultyMod] Critical: Osi.CharacterGetOwner query API is missing.")
 end
 
+--- Checks whether a character GUID is a player character in Osiris.
+-- @param guid string|nil: The character's world GUID string.
+-- @return boolean: True if the character is a player, false otherwise.
+local function OsiIsPlayer(guid)
+    if not guid or guid == "" then return false end
+    if Osi and Osi.CharacterIsPlayer then
+        return Osi.CharacterIsPlayer(guid) == 1
+    end
+    error("[DifficultyMod] Critical: Osi.CharacterIsPlayer query API is missing.")
+end
+
+--- Checks whether a character GUID is a member of any player party.
+-- @param guid string|nil: The character's world GUID string.
+-- @return boolean: True if the character is a party member, false otherwise.
+local function OsiIsPartyMember(guid)
+    if not guid or guid == "" then return false end
+    if Osi and Osi.CharacterIsPartyMember then
+        return Osi.CharacterIsPartyMember(guid) == 1
+    end
+    error("[DifficultyMod] Critical: Osi.CharacterIsPartyMember query API is missing.")
+end
+
+--- Retrieves a character's current level via Osiris.
+-- @param guid string|nil: The character's world GUID string.
+-- @return integer: Character level (defaults to 1 if not retrievable).
+local function OsiGetCharacterLevel(guid)
+    if not guid or guid == "" then return 1 end
+    if Osi and Osi.CharacterGetLevel then
+        local lvl = Osi.CharacterGetLevel(guid)
+        if lvl and lvl >= 1 then return lvl end
+        return 1
+    end
+    error("[DifficultyMod] Critical: Osi.CharacterGetLevel query API is missing.")
+end
+
+--- Retrieves the host character's GUID from Osiris in singleplayer or coop sessions.
+-- @return string|nil: Host character GUID string if present and valid.
+local function OsiGetHostCharacter()
+    if Osi and Osi.CharacterGetHostCharacter then
+        local host = Osi.CharacterGetHostCharacter()
+        if host and host ~= "" and host ~= "NULL_00000000-0000-0000-0000-000000000000" then
+            return host
+        end
+    end
+    return nil
+end
+
+--- Checks if two character GUIDs are in the same party.
+-- @param char1 string: First character GUID.
+-- @param char2 string: Second character GUID.
+-- @return boolean: True if both characters share the same party.
+local function OsiIsInPartyWith(char1, char2)
+    if not char1 or not char2 or char1 == "" or char2 == "" then return false end
+    if Osi and Osi.CharacterIsInPartyWith then
+        return Osi.CharacterIsInPartyWith(char1, char2) == 1
+    end
+    error("[DifficultyMod] Critical: Osi.CharacterIsInPartyWith query API is missing.")
+end
+
+--- Awards raw combat experience points to a character's party via Osiris.
+-- @param guid string: Player or party member GUID.
+-- @param amount integer: Experience points to award.
+-- @return nil
+local function OsiPartyAddActualExperience(guid, amount)
+    if not guid or guid == "" or not amount or amount <= 0 then return end
+    if Osi and Osi.PartyAddActualExperience then
+        Osi.PartyAddActualExperience(guid, amount)
+        return
+    end
+    error("[DifficultyMod] Critical: Osi.PartyAddActualExperience call API is missing.")
+end
+
+--- Checks if an entity is a player, party member, or summon owned by the player party.
+-- @param charGuid string|nil: Character GUID to evaluate.
+-- @return boolean: True if the entity belongs to the player party.
+local function IsPlayerOrPartyEntity(charGuid)
+    if not charGuid or charGuid == "" then return false end
+    -- Check direct player status
+    if OsiIsPlayer(charGuid) then return true end
+    -- Check direct party member status
+    if OsiIsPartyMember(charGuid) then return true end
+    -- Check summon owner via Osiris
+    local owner = OsiGetOwnerCharacter(charGuid)
+    if owner and (OsiIsPlayer(owner) or OsiIsPartyMember(owner)) then
+        return true
+    end
+    -- Check Extender entity component for owner handle fallback
+    local char = ExtGetCharacter(charGuid)
+    if char and char.OwnerCharacterHandle then
+        local ownerChar = Ext.Entity and Ext.Entity.GetCharacter and Ext.Entity.GetCharacter(char.OwnerCharacterHandle)
+        if ownerChar and ownerChar.MyGuid then
+            local ownerGuid = ownerChar.MyGuid
+            if OsiIsPlayer(ownerGuid) or OsiIsPartyMember(ownerGuid) then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 --------------------------------------------------------------------------------
 -- Section 2: Configuration Loading & Logging Utilities
 --------------------------------------------------------------------------------
@@ -433,7 +533,7 @@ local function DiscoverSummonTemplates()
     local count = 0
     for templateName, source in pairs(SummonTemplates) do
         count = count + 1
-        PrintLog(string.format("Discovered summon template: %s (Source: %s)", tostring(templateName), tostring(source)))
+        -- PrintLog(string.format("Discovered summon template: %s (Source: %s)", tostring(templateName), tostring(source)))
     end
     PrintLog(string.format("Total summon templates discovered: %d", count))
 end
@@ -800,7 +900,7 @@ local function ScaleAllLoadedMapEnemies()
 
     -- Call ExtGetAllCharacterGuids() -> table of string GUIDs
     local guids = ExtGetAllCharacterGuids()
-    if guids then
+    if guids and type(guids) == "table" then
         local count = 0
         -- Iterate through all character GUIDs present in the current level
         for _, g in ipairs(guids) do
@@ -835,7 +935,7 @@ local function AwardMultiplayerCombatExperience(amount, players)
             local inSameParty = false
             -- Check if this player is in the same party as an already-awarded player
             for otherGuid, _ in pairs(awardedPlayers) do
-                if Osi.CharacterIsInPartyWith(otherGuid, playerGuid) == 1 then
+                if OsiIsInPartyWith(otherGuid, playerGuid) then
                     inSameParty = true
                     break
                 end
@@ -843,8 +943,8 @@ local function AwardMultiplayerCombatExperience(amount, players)
 
             -- If player is in a distinct party, award XP to their entire party
             if not inSameParty then
-                -- Call Osiris procedure Osi.PartyAddActualExperience(char: string, amount: integer) -> nil
-                Osi.PartyAddActualExperience(playerGuid, amount)
+                -- Call library wrapper OsiPartyAddActualExperience(guid: string, amount: integer) -> nil
+                OsiPartyAddActualExperience(playerGuid, amount)
                 -- Mark player as awarded in tracking table
                 awardedPlayers[playerGuid] = true
                 success = true
@@ -860,34 +960,34 @@ end
 -- @param amount integer: The quantity of experience points to award.
 -- @return boolean: True if XP was successfully awarded to the party.
 local function AwardPartyCombatExperience(amount)
-    -- Validate that XP amount is positive and Osiris table is accessible
-    if not amount or amount <= 0 or not Osi then return false end
+    -- Validate that XP amount is positive
+    if not amount or amount <= 0 then return false end
 
     -- Check if multiple players exist in DB_IsPlayer (multiplayer session)
-    if Osi.DB_IsPlayer then
+    if Osi and Osi.DB_IsPlayer then
         local players = Osi.DB_IsPlayer:Get(nil)
         if players and #players > 1 then
             -- Delegate to dedicated multiplayer distribution function
             return AwardMultiplayerCombatExperience(amount, players)
         elseif players and #players == 1 and players[1] and players[1][1] then
             -- Single player in DB_IsPlayer
-            Osi.PartyAddActualExperience(players[1][1], amount)
+            OsiPartyAddActualExperience(players[1][1], amount)
             return true
         end
     end
 
     -- Singleplayer fallback: query host character
-    local host = (Osi.CharacterGetHostCharacter and Osi.CharacterGetHostCharacter()) or nil
-    if host and host ~= "" and host ~= "NULL_00000000-0000-0000-0000-000000000000" then
-        Osi.PartyAddActualExperience(host, amount)
+    local host = OsiGetHostCharacter()
+    if host then
+        OsiPartyAddActualExperience(host, amount)
         return true
     end
 
     -- Secondary fallback: DB_PartyMembers
-    if Osi.DB_PartyMembers then
+    if Osi and Osi.DB_PartyMembers then
         local members = Osi.DB_PartyMembers:Get(nil)
         if members and members[1] and members[1][1] then
-            Osi.PartyAddActualExperience(members[1][1], amount)
+            OsiPartyAddActualExperience(members[1][1], amount)
             return true
         end
     end
@@ -904,11 +1004,11 @@ local function RegisterServerEvents()
         error("[DifficultyMod] Critical: Osiris global table (Osi) is not available in server context.")
     end
 
-    -- Set of character GUIDs that have already awarded kill experience
+    -- Set of character GUIDs that have already awarded kill experience to prevent double-awarding on multi-hits
     local ProcessedDeadCharacters = {}
 
-    --- Internal death handler calculating and awarding scaled combat experience
-    local function HandleCharacterDied(charGuid, killerGuid)
+    --- Internal kill handler calculating and awarding scaled combat experience
+    local function HandleCharacterKilled(charGuid, attackOwnerGuid, attackerGuid)
         -- Exit immediately if custom XP scaling is inactive (1.0 = native engine XP, <= 0 = disabled)
         if not ShouldOverrideCombatXP then
             return
@@ -917,10 +1017,15 @@ local function RegisterServerEvents()
         if not charGuid or charGuid == "" then return end
         if ProcessedDeadCharacters[charGuid] then return end
 
+        -- Verify that the kill was executed by a player, party member, or party summon
+        -- Prevents NPC-on-NPC kills (e.g. Dallis executing Atusa or environmental scripted kills) from granting XP
+        local isPlayerKill = IsPlayerOrPartyEntity(attackOwnerGuid) or IsPlayerOrPartyEntity(attackerGuid)
+        if not isPlayerKill then
+            return
+        end
+
         -- Exclude players and party members from awarding kill XP
-        -- Call Osiris query Osi.CharacterIsPlayer(char: string) -> integer (1=true, 0=false)
-        -- Call Osiris query Osi.CharacterIsPartyMember(char: string) -> integer (1=true, 0=false)
-        if Osi.CharacterIsPlayer(charGuid) == 1 or Osi.CharacterIsPartyMember(charGuid) == 1 then
+        if OsiIsPlayer(charGuid) or OsiIsPartyMember(charGuid) then
             return
         end
 
@@ -929,9 +1034,8 @@ local function RegisterServerEvents()
             return
         end
 
-        -- Retrieve character level using Osiris query
-        -- Call Osiris query Osi.CharacterGetLevel(char: string) -> integer (character level)
-        local level = Osi.CharacterGetLevel(charGuid) or 1
+        -- Retrieve character level using library wrapper
+        local level = OsiGetCharacterLevel(charGuid)
         if level < 1 then level = 1 end
 
         -- Query character template name from Extender entity component with multiple fallbacks
@@ -991,21 +1095,21 @@ local function RegisterServerEvents()
         ProcessedDeadCharacters[charGuid] = true
 
         -- Call PrintLog(msg: string) to log detailed XP reward to debug console
-        PrintLog(string.format("Awarded %d Combat XP (Enemy: %s, Template: %s, Tier: %s, Level: %d, Base: %d, Multiplier: %.2f, Success: %s)",
-            scaledXP, tostring(charGuid), tostring(templateName or "Unknown"), gainTier, level, math.floor(baseKillXP), Config.CombatXPMultiplier, tostring(success)))
+        PrintLog(string.format("Awarded %d/%d Combat XP (Tier: %s, Level: %d, Multiplier: %.2f, Success: %s,\nEnemy: %s, Killer: %s, Template: %s)",
+            scaledXP, math.floor(baseKillXP), gainTier, level, Config.CombatXPMultiplier, tostring(success), tostring(charGuid), tostring(attackOwnerGuid or attackerGuid or "Unknown"), tostring(templateName or "Unknown")))
     end
 
-    -- 1. Register listener for CharacterDied Osiris event (Arity 1: character GUID)
+    -- 1. Register listener for CharacterKilledBy Osiris event (Arity 3: Defender, AttackOwner, Attacker)
     -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
-    ExtRegisterOsiris("CharacterDied", 1, "after", function(charGuid)
+    ExtRegisterOsiris("CharacterKilledBy", 3, "after", function(defenderGuid, attackOwnerGuid, attackerGuid)
         -- Process custom scaled kill experience for the defeated character
-        HandleCharacterDied(charGuid)
+        HandleCharacterKilled(defenderGuid, attackOwnerGuid, attackerGuid)
     end)
 
     -- 2. Register listener for RegionStarted Osiris event (savegame load and map transitions)
     -- Call ExtRegisterOsiris(eventName: string, arity: integer, eventType: string, handler: function) -> nil
     ExtRegisterOsiris("RegionStarted", 1, "after", function(region)
-        -- Call ScaleAllLoadedMapEnemies() -> nil to synchronize all loaded enemy stats
+        -- Synchronize and scale stats for all loaded enemy characters on the map
         ScaleAllLoadedMapEnemies()
     end)
 
